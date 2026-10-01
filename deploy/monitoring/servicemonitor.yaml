@@ -1,0 +1,17 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mxl-webrtc-monitor
+  labels:
+    app: mxl-webrtc-monitor
+spec:
+  selector:
+    matchLabels:
+      app: mxl-webrtc-monitor
+  endpoints:
+    - port: web
+      path: /metrics
+      interval: 5s
+    - port: mediamtx-metrics
+      path: /metrics
+      interval: 15s

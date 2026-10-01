@@ -1,0 +1,83 @@
+# Single-machine demo. Host networking so IS-05, WHEP and HLS ports match the defaults.
+# The registry service is the integration stand-in. Point NMOS_REGISTRY_ADDRESS at a
+# real nmos-cpp registry to use one instead.
+
+services:
+  registry:
+    image: python:3.12-slim
+    network_mode: host
+    volumes:
+      - ../tests/integration/fake_registry.py:/fake_registry.py:ro
+    command: ["python", "/fake_registry.py", "3210", "3211"]
+
+  writer:
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:nightly-dev
+    network_mode: host
+    user: "0:0"
+    entrypoint: ["/usr/local/bin/mxl-flow-writer"]
+    command:
+      - /dev/shm/mxl-demo/src
+      - aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+      - bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
+      - cccccccc-cccc-4ccc-8ccc-cccccccccccc
+      - "600"
+      - "480"
+      - "270"
+      - "25"
+    volumes:
+      - /dev/shm:/dev/shm
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.20.1
+    network_mode: host
+    volumes:
+      - mtx-config:/config
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        while [ ! -s /config/mediamtx.yml ]; do sleep 0.2; done
+        exec /mediamtx /config/mediamtx.yml
+
+  monitor:
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:nightly-dev
+    network_mode: host
+    depends_on:
+      - registry
+    environment:
+      HOST_ID: demo
+      MXL_DOMAIN_SCAN_PATH: /dev/shm/mxl-demo
+      MONITOR_CHANNELS: "1"
+      ENCODER: x264
+      MONITOR_PREVIEW_HEIGHT: "270"
+      NMOS_REGISTRY_ADDRESS: 127.0.0.1
+      NMOS_REGISTRY_PORT: "3210"
+      NMOS_DNS_SD: "false"
+      NMOS_PORT: "3242"
+      WEB_PORT: "8100"
+      MEDIAMTX_CONFIG_PATH: /config/mediamtx.yml
+      MEDIAMTX_RTSP_URL: rtsp://127.0.0.1:8554
+      MEDIAMTX_API_URL: http://127.0.0.1:9997
+      MONITOR_PUBLIC_IP: 127.0.0.1
+    volumes:
+      - /dev/shm:/dev/shm:ro
+      - mtx-config:/config
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    network_mode: host
+    volumes:
+      - ../deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    network_mode: host
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SERVER_HTTP_PORT: "3000"
+    volumes:
+      - ../deploy/grafana/mxl-webrtc-monitor.json:/var/lib/grafana/dashboards/mxl-webrtc-monitor.json:ro
+      - ../deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+
+volumes:
+  mtx-config:

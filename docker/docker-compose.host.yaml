@@ -1,0 +1,33 @@
+# One host of a real platform. The MXL root is the shared tmpfs, read-only here.
+# Set NMOS_REGISTRY_ADDRESS to the facility registry. A second monitor on the same
+# host needs different WEB_PORT, NMOS_PORT, and MediaMTX ports.
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.20.1
+    network_mode: host
+    volumes:
+      - mtx-config:/config
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        while [ ! -s /config/mediamtx.yml ]; do sleep 0.2; done
+        exec /mediamtx /config/mediamtx.yml
+
+  monitor:
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:nightly-dev
+    network_mode: host
+    environment:
+      MXL_DOMAIN_SCAN_PATH: /Volumes/mxl
+      NMOS_REGISTRY_ADDRESS: ${NMOS_REGISTRY_ADDRESS:-}
+      NMOS_REGISTRY_PORT: ${NMOS_REGISTRY_PORT:-3210}
+      NMOS_DNS_SD: "false"
+      MONITOR_PUBLIC_IP: ${MONITOR_PUBLIC_IP:-}
+      ENCODER: ${ENCODER:-auto}
+      MONITOR_CHANNELS: ${MONITOR_CHANNELS:-4}
+    volumes:
+      - /Volumes/mxl:/Volumes/mxl:ro
+      - mtx-config:/config
+
+volumes:
+  mtx-config:
