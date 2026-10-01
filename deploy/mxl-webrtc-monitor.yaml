@@ -1,0 +1,133 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mxl-webrtc-monitor
+  labels:
+    app: mxl-webrtc-monitor
+data:
+  MONITOR_CHANNELS: "4"
+  ENCODER: auto
+  NMOS_DNS_SD: "false"
+  NMOS_REGISTRY_PORT: "3210"
+  WEB_PORT: "8100"
+  NMOS_PORT: "3242"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mxl-webrtc-monitor
+  labels:
+    app: mxl-webrtc-monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mxl-webrtc-monitor
+  template:
+    metadata:
+      labels:
+        app: mxl-webrtc-monitor
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8100"
+        prometheus.io/path: "/metrics"
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      # Pin one replica to a media node in the platform overlay:
+      # nodeName: media-node-a
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        supplementalGroups: [1000]
+        fsGroup: 1000
+      # Optional GPU. Uncomment together with the device request below.
+      # runtimeClassName: nvidia
+      containers:
+        - name: monitor
+          image: ghcr.io/leeo86/mxl-webrtc-monitor:nightly-dev
+          envFrom:
+            - configMapRef:
+                name: mxl-webrtc-monitor
+          env:
+            - name: HOST_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: MXL_DOMAIN_SCAN_PATH
+              value: /Volumes/mxl
+            - name: MEDIAMTX_CONFIG_PATH
+              value: /config/mediamtx.yml
+            - name: NMOS_REGISTRY_ADDRESS
+              value: ""
+          ports:
+            - name: web
+              containerPort: 8100
+            - name: nmos
+              containerPort: 3242
+          volumeMounts:
+            - name: mxl
+              mountPath: /Volumes/mxl
+              readOnly: true
+            - name: mediamtx-config
+              mountPath: /config
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: web
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: web
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            # limits:
+            #   nvidia.com/gpu: 1
+        - name: mediamtx
+          image: bluenviron/mediamtx:1.20.1
+          command: ["sh", "-c"]
+          args:
+            - while [ ! -s /config/mediamtx.yml ]; do sleep 0.2; done; exec /mediamtx /config/mediamtx.yml
+          ports:
+            - name: whep
+              containerPort: 8889
+            - name: hls
+              containerPort: 8888
+            - name: ice
+              containerPort: 8189
+              protocol: UDP
+            - name: mediamtx-metrics
+              containerPort: 9998
+          volumeMounts:
+            - name: mediamtx-config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: mxl
+          hostPath:
+            path: /Volumes/mxl
+            type: Directory
+        - name: mediamtx-config
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mxl-webrtc-monitor
+  labels:
+    app: mxl-webrtc-monitor
+spec:
+  clusterIP: None
+  selector:
+    app: mxl-webrtc-monitor
+  ports:
+    - name: web
+      port: 8100
+      targetPort: web
+    - name: mediamtx-metrics
+      port: 9998
+      targetPort: mediamtx-metrics

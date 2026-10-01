@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    env:
+      MXL_REF: 218ddaa0a08c12ffe75fc475ae65aa3d9eef16d7
+      NMOS_CPP_REF: fe303849527394b03bdedc8f161f377fe458bb62
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config curl zip unzip tar \
+            bison flex autoconf automake libtool \
+            libboost-system-dev libboost-thread-dev libboost-chrono-dev \
+            libboost-date-time-dev libboost-regex-dev libboost-random-dev \
+            libboost-filesystem-dev libcpprest-dev nlohmann-json3-dev \
+            libssl-dev libavahi-compat-libdnssd-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-good1.0-dev \
+            libgstrtspserver-1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-rtsp gstreamer1.0-x \
+            gstreamer1.0-tools
+
+      - name: Build MXL
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg /opt/vcpkg
+          /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          git init /tmp/mxl
+          git -C /tmp/mxl remote add origin https://github.com/dmf-mxl/mxl.git
+          git -C /tmp/mxl fetch --depth 1 origin "$MXL_REF"
+          git -C /tmp/mxl checkout FETCH_HEAD
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          baseline = subprocess.check_output(["git", "-C", "/opt/vcpkg", "rev-parse", "HEAD"], text=True).strip()
+          doc = json.loads(pathlib.Path("docker/mxl-vcpkg.json").read_text())
+          doc["builtin-baseline"] = baseline
+          pathlib.Path("/tmp/mxl-manifest.json").write_text(json.dumps(doc))
+          PY
+          mkdir -p /tmp/mxl-manifest
+          cp /tmp/mxl-manifest.json /tmp/mxl-manifest/vcpkg.json
+          cmake -S /tmp/mxl -B /tmp/mxl/build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DVCPKG_MANIFEST_DIR=/tmp/mxl-manifest \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF -DBUILD_UTILS=OFF -DBUILD_DOCS=OFF \
+            -DMXL_ENABLE_FABRICS_OFI=OFF \
+            -DCMAKE_INSTALL_PREFIX=/opt/mxl
+          cmake --build /tmp/mxl/build -j"$(nproc)"
+          sudo cmake --install /tmp/mxl/build
+
+      - name: Fetch nmos-cpp
+        run: |
+          git init /tmp/nmos-cpp
+          git -C /tmp/nmos-cpp remote add origin https://github.com/sony/nmos-cpp.git
+          git -C /tmp/nmos-cpp fetch --depth 1 origin "$NMOS_CPP_REF"
+          git -C /tmp/nmos-cpp checkout FETCH_HEAD
+
+      - name: Configure and build
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DMWM_WITH_NMOS=ON \
+            -DNMOS_CPP_DIR=/tmp/nmos-cpp/Development \
+            -DCMAKE_PREFIX_PATH="/opt/mxl;/tmp/mxl/build/vcpkg_installed/x64-linux"
+          cmake --build build -j"$(nproc)"
+
+      - name: Unit tests
+        run: ./build/unit-tests
+
+      - name: Integration
+        run: |
+          sudo ldconfig
+          curl -fsSL -o /tmp/mediamtx.tgz https://github.com/bluenviron/mediamtx/releases/download/v1.20.1/mediamtx_v1.20.1_linux_amd64.tar.gz
+          mkdir -p /tmp/mediamtx
+          tar -xzf /tmp/mediamtx.tgz -C /tmp/mediamtx
+          export LD_LIBRARY_PATH=/opt/mxl/lib
+          export MEDIAMTX_BIN=/tmp/mediamtx/mediamtx
+          tests/integration/monitor.sh build/mxl-webrtc-monitor build/mxl-flow-writer

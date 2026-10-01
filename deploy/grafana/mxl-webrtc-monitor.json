@@ -1,0 +1,83 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [{"expr": "mxl_webrtc_monitor_channel_state", "legendFormat": "{{channel}} {{kind}} {{state}}", "refId": "A"}],
+      "title": "Channel state",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "targets": [{"expr": "mxl_webrtc_monitor_read_lag_grains", "legendFormat": "ch {{channel}}", "refId": "A"}],
+      "title": "Read lag",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "cps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "id": 3,
+      "targets": [
+        {"expr": "rate(mxl_webrtc_monitor_grains_dropped_total[1m])", "legendFormat": "{{channel}} {{reason}}", "refId": "A"}
+      ],
+      "title": "Drops",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "fps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "id": 4,
+      "targets": [{"expr": "mxl_webrtc_monitor_encode_fps", "legendFormat": "ch {{channel}}", "refId": "A"}],
+      "title": "Encode fps",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "id": 5,
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, channel) (rate(mxl_webrtc_monitor_encode_latency_seconds_bucket[1m])))", "legendFormat": "ch {{channel}} p95", "refId": "A"}],
+      "title": "Encode latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "bps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "id": 6,
+      "targets": [{"expr": "mxl_webrtc_monitor_output_bitrate_bps", "legendFormat": "ch {{channel}}", "refId": "A"}],
+      "title": "Output bitrate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
+      "id": 7,
+      "targets": [{"expr": "mxl_webrtc_monitor_viewers", "legendFormat": "{{channel}} {{protocol}}", "refId": "A"}],
+      "title": "Viewers",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["mxl"],
+  "templating": {"list": []},
+  "time": {"from": "now-15m", "to": "now"},
+  "timezone": "browser",
+  "title": "MXL WebRTC Monitor",
+  "uid": "mxl-webrtc-monitor",
+  "version": 1
+}
