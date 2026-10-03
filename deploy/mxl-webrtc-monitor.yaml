@@ -107,9 +107,9 @@ spec:
             #   nvidia.com/gpu: 1
         - name: mediamtx
           image: bluenviron/mediamtx:1.20.1
-          command: ["sh", "-c"]
-          args:
-            - while [ ! -s /config/mediamtx.yml ]; do sleep 0.2; done; exec /mediamtx /config/mediamtx.yml
+          # The image has no shell. MediaMTX exits until the monitor has written
+          # its config, and the kubelet restarts it.
+          args: ["/config/mediamtx.yml"]
           ports:
             - name: whep
               containerPort: 8889

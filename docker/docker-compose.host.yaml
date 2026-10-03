@@ -8,11 +8,10 @@ services:
     network_mode: host
     volumes:
       - mtx-config:/config
-    entrypoint: ["sh", "-c"]
-    command:
-      - |
-        while [ ! -s /config/mediamtx.yml ]; do sleep 0.2; done
-        exec /mediamtx /config/mediamtx.yml
+    # The image has no shell. MediaMTX exits until the monitor has written its
+    # config, and the restart policy starts it again.
+    command: ["/config/mediamtx.yml"]
+    restart: unless-stopped
 
   monitor:
     image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.0

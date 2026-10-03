@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- NVENC uses `nvcudah264enc` (preset `p1`, tune `ultra-low-latency`, CBR, zero reorder delay) with NV12 input. The legacy `nvh264enc` presets fail on current NVIDIA drivers with "Selected preset not supported" (seen on driver 595.84), and every channel retried NVENC forever.
+- An encoder error after the pipeline is playing now switches that channel to x264 and increments `mxl_webrtc_monitor_encoder_fallbacks_total`, the same as a failure while building the pipeline.
+- The Compose files and `deploy/mxl-webrtc-monitor.yaml` start MediaMTX without `sh`. The MediaMTX image has no shell, so the sidecar never started.
+
 ## 1.0.0
 
 Stable platform contract. A later breaking change needs 2.0.0.
