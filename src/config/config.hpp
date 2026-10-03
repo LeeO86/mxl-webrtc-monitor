@@ -41,6 +41,8 @@ struct Config
     int read_offset_grains = 2;
     std::string encoder = "auto";
     std::string monitor_public_ip;
+    std::string monitor_whep_public_url;
+    std::string monitor_hls_public_url;
     std::string mediamtx_rtsp_url = "rtsp://127.0.0.1:8554";
     std::string mediamtx_api_url = "http://127.0.0.1:9997";
     std::string mediamtx_config_path = "/config/mediamtx.yml";
@@ -76,6 +78,10 @@ std::vector<std::string> configKeys();
 std::map<std::string, std::string> configToMap(Config const& cfg);
 std::string configToJson(Config const& cfg, std::map<std::string, ValueOrigin> const& origin, bool restartRequired);
 std::string configToEnv(Config const& cfg);
+
+// Empty is valid. Otherwise an absolute http or https URL with a host, an
+// optional port, and no path other than "/". A trailing slash is removed.
+std::string normalizePublicBaseUrl(std::string const& key, std::string const& value);
 
 std::map<std::string, std::string> environmentValues(char const* const* envp);
 std::map<std::string, std::string> loadConfigFile(std::string const& path, std::vector<ChannelSettings>* channels);

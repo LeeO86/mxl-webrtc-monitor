@@ -37,6 +37,20 @@ The video thread publishes an H.264 elementary stream. The audio thread publishe
 
 ## 4. Tests
 
-- Unit tests cover config precedence, IS-05 UUID validation, UUIDv5 ids, the channel state machine, domain scan including mirror domains, audio pair selection, and backoff.
-- `tests/integration/monitor.sh` writes a v210 and float32 flow, PATCHes channel 1, waits for `running`, checks that the HLS playlist grows segments, stops the writer and expects `no_signal`, activates a missing flow and expects `waiting`, then creates that flow and expects `running` without another PATCH.
+- Unit tests cover config precedence, IS-05 UUID validation, UUIDv5 ids, the channel state machine, domain scan including mirror domains, audio pair selection, backoff, and public WHEP/HLS URL parsing plus the channel playback JSON.
+- `tests/integration/monitor.sh` writes a v210 and float32 flow, PATCHes channel 1, waits for `running`, checks that the HLS playlist grows segments, stops the writer and expects `no_signal`, activates a missing flow and expects `waiting`, then creates that flow and expects `running` without another PATCH. It sets `MONITOR_HLS_PUBLIC_URL` and fetches the playlist through the URL the API reports.
 - Hardware checks in spec §10 (NVENC on A4000 and L4, 4 and 16 channels, browser WebRTC, HLS with UDP blocked) are not run in CI.
+
+## 5. Public WHEP and HLS URLs
+
+`MONITOR_WHEP_PUBLIC_URL` and `MONITOR_HLS_PUBLIC_URL` are optional absolute
+origins. When set, `/api/v1/channels` returns
+`<origin>/ch<n>/whep` and `<origin>/ch<n>/index.m3u8` and
+`playback.public.whep` / `playback.public.hls` is true. The page does not
+rewrite a public URL. When a setting is empty, that URL stays
+`http://<MONITOR_PUBLIC_IP>:<port>/ch<n>/...` and the page still replaces only
+the hostname. An `https:` page shows a tile hint when a playback URL is still
+`http:`. ICE and `webrtcAdditionalHosts` stay on `MONITOR_PUBLIC_IP`.
+
+A same-origin proxy of WHEP and HLS through the monitor's own web server is
+not implemented.

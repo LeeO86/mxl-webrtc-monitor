@@ -23,6 +23,21 @@ bool mxlRootMounted(std::string const& path)
     std::error_code ec;
     return std::filesystem::is_directory(path, ec);
 }
+
+std::string playbackJson(Config const& cfg, int index)
+{
+    auto const suffix = "/ch" + std::to_string(index);
+    bool const whepPublic = !cfg.monitor_whep_public_url.empty();
+    bool const hlsPublic = !cfg.monitor_hls_public_url.empty();
+    auto const whep = whepPublic ? cfg.monitor_whep_public_url + suffix + "/whep"
+                                 : "http://" + cfg.monitor_public_ip + ":" + std::to_string(cfg.mediamtx_whep_port) + suffix + "/whep";
+    auto const hls = hlsPublic ? cfg.monitor_hls_public_url + suffix + "/index.m3u8"
+                               : "http://" + cfg.monitor_public_ip + ":" + std::to_string(cfg.mediamtx_hls_port) + suffix + "/index.m3u8";
+    std::ostringstream out;
+    out << "\"playback\":{\"whep\":" << jsonString(whep) << ",\"hls\":" << jsonString(hls) << ",\"public\":{\"whep\":" << (whepPublic ? "true" : "false")
+        << ",\"hls\":" << (hlsPublic ? "true" : "false") << "}}";
+    return out.str();
+}
 } // namespace
 
 Api::Api(std::shared_ptr<ConfigStore> store, std::shared_ptr<ChannelBook> book)
@@ -104,9 +119,7 @@ std::string Api::channelsJson() const
             << ",\"audio_bitrate_kbps\":" << view.settings.audio_bitrate_kbps << ",\"max_fps\":" << view.settings.max_fps
             << ",\"audio_pair\":" << view.settings.audio_pair << ",\"downmix\":" << jsonString(view.settings.downmix)
             << ",\"overlay\":" << (view.settings.overlay ? "true" : "false") << ",\"viewers\":{\"webrtc\":" << view.viewers_webrtc
-            << ",\"hls\":" << view.viewers_hls << "},\"playback\":{\"whep\":" << jsonString("http://" + cfg.monitor_public_ip + ":" + std::to_string(cfg.mediamtx_whep_port) + "/ch" + std::to_string(view.settings.index) + "/whep")
-            << ",\"hls\":" << jsonString("http://" + cfg.monitor_public_ip + ":" + std::to_string(cfg.mediamtx_hls_port) + "/ch" + std::to_string(view.settings.index) + "/index.m3u8")
-            << "},\"meters\":{\"peak_dbfs\":[";
+            << ",\"hls\":" << view.viewers_hls << "}," << playbackJson(cfg, view.settings.index) << ",\"meters\":{\"peak_dbfs\":[";
         for (std::size_t i = 0; i < view.peak_dbfs.size(); ++i)
         {
             if (i != 0)

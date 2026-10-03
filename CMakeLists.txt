@@ -45,6 +45,7 @@ if(MWM_BUILD_TESTS)
         tests/unit/test_state.cpp
         tests/unit/test_domain.cpp
         tests/unit/test_audio.cpp
+        tests/unit/test_playback.cpp
     )
     target_include_directories(unit-tests PRIVATE src third_party)
     target_link_libraries(unit-tests PRIVATE mwm-core)

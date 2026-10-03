@@ -60,6 +60,12 @@ spec:
               value: /config/mediamtx.yml
             - name: NMOS_REGISTRY_ADDRESS
               value: ""
+            # Public origins when the UI is reached through an HTTPS proxy.
+            # ICE stays on MONITOR_PUBLIC_IP and is not proxied.
+            # - name: MONITOR_WHEP_PUBLIC_URL
+            #   value: https://mon1-whep.small.mxl.ipla.media.int
+            # - name: MONITOR_HLS_PUBLIC_URL
+            #   value: https://mon1-hls.small.mxl.ipla.media.int
           ports:
             - name: web
               containerPort: 8100

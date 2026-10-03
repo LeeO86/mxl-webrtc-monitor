@@ -34,6 +34,16 @@ function pageUrl(url) {
   }
 }
 
+function resolvePlayback(channel) {
+  const flags = channel.playback?.public || {};
+  const whep = flags.whep ? channel.playback.whep : pageUrl(channel.playback.whep);
+  const hls = flags.hls ? channel.playback.hls : pageUrl(channel.playback.hls);
+  const blocked =
+    location.protocol === "https:" &&
+    (String(whep).startsWith("http:") || String(hls).startsWith("http:"));
+  return { whep, hls, blocked };
+}
+
 function meterHeight(db) {
   const clamped = Math.max(-60, Math.min(0, Number(db) || -60));
   return `${((clamped + 60) / 60) * 100}%`;
@@ -82,8 +92,12 @@ async function playTile(channel, video) {
   if (!video) return;
   stopTile(channel.index);
   video.muted = true;
-  const whep = pageUrl(channel.playback.whep);
-  const hlsUrl = pageUrl(channel.playback.hls);
+  const resolved = resolvePlayback(channel);
+  if (resolved.blocked && resolved.whep.startsWith("http:") && resolved.hls.startsWith("http:")) {
+    return;
+  }
+  const whep = resolved.whep;
+  const hlsUrl = resolved.hls;
   try {
     const pc = new RTCPeerConnection();
     pc.addTransceiver("video", { direction: "recvonly" });
@@ -256,6 +270,7 @@ onBeforeUnmount(() => {
             <div>
               <div class="name">{{ channel.video_label }}</div>
               <div class="src">{{ channel.source_label || "no source" }} · {{ channel.format || "—" }} · {{ channel.encoder || "—" }}</div>
+              <div class="hint" v-if="resolvePlayback(channel).blocked">playback blocked: set MONITOR_WHEP_PUBLIC_URL / MONITOR_HLS_PUBLIC_URL</div>
             </div>
             <div>
               <span class="badge" :class="channel.video.state">{{ channel.video.state }}</span>

@@ -72,6 +72,7 @@ export ENCODER=x264
 export MONITOR_PREVIEW_HEIGHT=270
 export MONITOR_VIDEO_BITRATE_KBPS=800
 export MONITOR_PUBLIC_IP=127.0.0.1
+export MONITOR_HLS_PUBLIC_URL="http://127.0.0.1:${HLS_PORT}"
 export LOG_LEVEL=info
 export READ_OFFSET_GRAINS=1
 
@@ -140,9 +141,24 @@ wait_state() {
 
 wait_state running
 
+channels_json="$(curl -sf "http://127.0.0.1:${WEB_PORT}/api/v1/channels")"
+HLS_INDEX="$(python3 -c '
+import json, sys
+playback = json.loads(sys.argv[1])["channels"][0]["playback"]
+base = sys.argv[2]
+if playback["hls"] != base + "/ch1/index.m3u8":
+    raise SystemExit("hls url %s" % playback["hls"])
+if playback["public"]["hls"] is not True or playback["public"]["whep"] is not False:
+    raise SystemExit("public flags %s" % playback["public"])
+if not playback["whep"].startswith("http://127.0.0.1:"):
+    raise SystemExit("whep url %s" % playback["whep"])
+print(playback["hls"])
+' "$channels_json" "$MONITOR_HLS_PUBLIC_URL")"
+echo "hls public url $HLS_INDEX"
+
 hls_has_segments() {
   local master variant media
-  master="$(curl -sfL --max-time 3 -c "$WORKDIR/cookies" -b "$WORKDIR/cookies" "http://127.0.0.1:${HLS_PORT}/ch1/index.m3u8" || true)"
+  master="$(curl -sfL --max-time 3 -c "$WORKDIR/cookies" -b "$WORKDIR/cookies" "$HLS_INDEX" || true)"
   printf '%s\n' "$master" >"$WORKDIR/hls-master.txt"
   variant="$(printf '%s\n' "$master" | awk '/^[^#].*\.m3u8/ { print; exit }')"
   variant="${variant%%\?*}"
@@ -150,7 +166,7 @@ hls_has_segments() {
     return 1
   fi
   if [[ "$variant" != http* ]]; then
-    variant="http://127.0.0.1:${HLS_PORT}/ch1/${variant}"
+    variant="${HLS_INDEX%/*}/${variant}"
   fi
   media="$(curl -sfL --max-time 3 -c "$WORKDIR/cookies" -b "$WORKDIR/cookies" "$variant" || true)"
   printf '%s\n' "$media" >"$WORKDIR/hls-media.txt"
