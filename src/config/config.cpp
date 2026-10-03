@@ -3,6 +3,9 @@
 #include "util/jsonutil.hpp"
 #include "util/net.hpp"
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+
 #include <algorithm>
 #include <cctype>
 #include <fstream>
@@ -100,10 +103,11 @@ void requireKnown(std::map<std::string, std::string> const& values)
 std::vector<std::string> configKeys()
 {
     return {"HOST_ID", "MXL_DOMAIN_SCAN_PATH", "MONITOR_CHANNELS", "MONITOR_PREVIEW_HEIGHT", "MONITOR_MAX_FPS", "MONITOR_VIDEO_BITRATE_KBPS",
-        "MONITOR_AUDIO_BITRATE_KBPS", "READ_OFFSET_GRAINS", "ENCODER", "MONITOR_PUBLIC_IP", "MONITOR_WHEP_PUBLIC_URL", "MONITOR_HLS_PUBLIC_URL",
-        "MEDIAMTX_RTSP_URL", "MEDIAMTX_API_URL", "MEDIAMTX_CONFIG_PATH", "MEDIAMTX_WHEP_PORT", "MEDIAMTX_HLS_PORT", "MEDIAMTX_ICE_UDP_PORT",
-        "NMOS_ENABLE", "NMOS_REGISTRY_ADDRESS", "NMOS_REGISTRY_PORT", "NMOS_DNS_SD", "NMOS_PORT", "NMOS_SEED", "WEB_PORT", "LOG_LEVEL",
-        "METRICS_AUDIO_PEAK", "MONITOR_CONFIG_FILE"};
+        "MONITOR_AUDIO_BITRATE_KBPS", "READ_OFFSET_GRAINS", "ENCODER", "MONITOR_PUBLIC_IP", "NMOS_HOST_ADDRESS", "MONITOR_WHEP_PUBLIC_URL",
+        "MONITOR_HLS_PUBLIC_URL", "STATE_DIR", "SHUTDOWN_TIMEOUT_S", "MXL_CLEANUP_ON_EXIT", "NMOS_LABEL", "NMOS_TAGS", "NMOS_QUERY_ADDRESS",
+        "NMOS_QUERY_PORT", "MEDIAMTX_METRICS_PORT", "MEDIAMTX_RTSP_URL", "MEDIAMTX_API_URL", "MEDIAMTX_CONFIG_PATH", "MEDIAMTX_WHEP_PORT",
+        "MEDIAMTX_HLS_PORT", "MEDIAMTX_ICE_UDP_PORT", "NMOS_ENABLE", "NMOS_REGISTRY_ADDRESS", "NMOS_REGISTRY_PORT", "NMOS_DNS_SD", "NMOS_PORT",
+        "NMOS_SEED", "WEB_PORT", "LOG_LEVEL", "METRICS_AUDIO_PEAK", "MONITOR_CONFIG_FILE"};
 }
 
 std::string normalizePublicBaseUrl(std::string const& key, std::string const& value)
@@ -209,6 +213,242 @@ std::string normalizePublicBaseUrl(std::string const& key, std::string const& va
         normalized += port;
     }
     return normalized;
+}
+
+namespace
+{
+bool ipv4LoopbackOrUnspecified(in_addr const& address)
+{
+    auto const value = ntohl(address.s_addr);
+    if (value == 0)
+    {
+        return true;
+    }
+    return (value & 0xff000000u) == 0x7f000000u;
+}
+
+bool ipv6LoopbackOrUnspecified(in6_addr const& address)
+{
+    bool zero = true;
+    for (int i = 0; i < 16; ++i)
+    {
+        if (address.s6_addr[i] != 0)
+        {
+            zero = false;
+            break;
+        }
+    }
+    if (zero)
+    {
+        return true;
+    }
+    bool loopback = address.s6_addr[15] == 1;
+    for (int i = 0; i < 15; ++i)
+    {
+        if (address.s6_addr[i] != 0)
+        {
+            loopback = false;
+            break;
+        }
+    }
+    return loopback;
+}
+
+std::map<std::string, std::vector<std::string>> parseTags(std::string const& text)
+{
+    if (text.empty() || text == "{}")
+    {
+        return {};
+    }
+    std::string err;
+    auto const root = json::parse(text, &err);
+    if (!err.empty() || !root.is<picojson::object>())
+    {
+        throw ConfigError("NMOS_TAGS must be a JSON object of string arrays");
+    }
+    std::map<std::string, std::vector<std::string>> tags;
+    for (auto const& [name, value] : root.get<picojson::object>())
+    {
+        if (name.empty() || !value.is<picojson::array>())
+        {
+            throw ConfigError("NMOS_TAGS must be a JSON object of string arrays");
+        }
+        std::vector<std::string> values;
+        for (auto const& item : value.get<picojson::array>())
+        {
+            if (!item.is<std::string>())
+            {
+                throw ConfigError("NMOS_TAGS values must be strings");
+            }
+            values.push_back(item.get<std::string>());
+        }
+        tags[name] = std::move(values);
+    }
+    return tags;
+}
+
+std::string settingText(std::string const& key, picojson::value const& value)
+{
+    if (value.is<std::string>())
+    {
+        return value.get<std::string>();
+    }
+    if (value.is<bool>())
+    {
+        return value.get<bool>() ? "true" : "false";
+    }
+    if (value.is<double>())
+    {
+        return std::to_string(static_cast<long long>(value.get<double>()));
+    }
+    if (key == "NMOS_TAGS" && value.is<picojson::object>())
+    {
+        return value.serialize();
+    }
+    throw ConfigError("unsupported config value for " + key);
+}
+
+void appendChannelObject(picojson::object const& obj, std::map<std::string, std::string>& out)
+{
+    auto const indexIt = obj.find("index");
+    if (indexIt == obj.end() || !indexIt->second.is<double>())
+    {
+        throw ConfigError("channel index is required");
+    }
+    int const index = static_cast<int>(indexIt->second.get<double>());
+    if (index < 1 || index > 16)
+    {
+        throw ConfigError("channel index is outside 1..16");
+    }
+    ChannelSettings probe = defaultChannel(index, Config{});
+    for (auto const& [field, fieldValue] : obj)
+    {
+        if (field == "index")
+        {
+            continue;
+        }
+        std::string mapped = field;
+        for (auto& c : mapped)
+        {
+            if (c == '-')
+            {
+                c = '_';
+            }
+            else
+            {
+                c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            }
+        }
+        auto const text = settingText(channelKey(index, mapped), fieldValue);
+        applyChannelValue(probe, mapped, text);
+        out[channelKey(index, mapped)] = text;
+    }
+}
+} // namespace
+
+void validateAnnounceAddress(std::string const& key, std::string const& value)
+{
+    if (value.empty())
+    {
+        throw ConfigError(key + " is empty");
+    }
+    in_addr ipv4{};
+    in6_addr ipv6{};
+    bool const v4 = ::inet_pton(AF_INET, value.c_str(), &ipv4) == 1;
+    bool const v6 = !v4 && ::inet_pton(AF_INET6, value.c_str(), &ipv6) == 1;
+    if (!v4 && !v6)
+    {
+        throw ConfigError(key + " must be an IP address literal");
+    }
+    if ((v4 && ipv4LoopbackOrUnspecified(ipv4)) || (v6 && ipv6LoopbackOrUnspecified(ipv6)))
+    {
+        throw ConfigError(key + " must not be a loopback or unspecified address");
+    }
+}
+
+std::string nodeLabel(Config const& cfg)
+{
+    return cfg.nmos_label.empty() ? cfg.host_id : cfg.nmos_label;
+}
+
+std::string deviceLabel(Config const& cfg)
+{
+    return cfg.nmos_label.empty() ? std::string("MXL WebRTC Monitor") : cfg.nmos_label + " WebRTC Monitor";
+}
+
+std::string tagsToJson(std::map<std::string, std::vector<std::string>> const& tags)
+{
+    picojson::object root;
+    for (auto const& [name, values] : tags)
+    {
+        picojson::array items;
+        for (auto const& value : values)
+        {
+            items.push_back(picojson::value(value));
+        }
+        root[name] = picojson::value(items);
+    }
+    return picojson::value(root).serialize();
+}
+
+std::string exportConfigDocument(Config const& cfg)
+{
+    picojson::object settings;
+    for (auto const& [key, value] : configToMap(cfg))
+    {
+        settings[key] = picojson::value(value);
+    }
+    picojson::object root;
+    root["version"] = picojson::value(1.0);
+    root["settings"] = picojson::value(settings);
+    root["secrets_included"] = picojson::value(false);
+    return picojson::value(root).serialize();
+}
+
+std::map<std::string, std::string> settingsFromImport(std::string const& document)
+{
+    std::string err;
+    auto const root = json::parse(document, &err);
+    if (!err.empty() || !root.is<picojson::object>())
+    {
+        throw ConfigError("config import is not a JSON object");
+    }
+    auto const& obj = root.get<picojson::object>();
+    auto const version = obj.find("version");
+    if (version != obj.end())
+    {
+        if (!version->second.is<double>() || static_cast<int>(version->second.get<double>()) != 1)
+        {
+            throw ConfigError("config import version must be 1");
+        }
+    }
+    auto const settingsIt = obj.find("settings");
+    if (settingsIt == obj.end() || !settingsIt->second.is<picojson::object>())
+    {
+        throw ConfigError("config import requires a settings object");
+    }
+    std::map<std::string, std::string> out;
+    for (auto const& [key, value] : settingsIt->second.get<picojson::object>())
+    {
+        out[key] = settingText(key, value);
+    }
+    auto const channels = obj.find("channels");
+    if (channels != obj.end())
+    {
+        if (!channels->second.is<picojson::array>())
+        {
+            throw ConfigError("channels entries must be objects");
+        }
+        for (auto const& item : channels->second.get<picojson::array>())
+        {
+            if (!item.is<picojson::object>())
+            {
+                throw ConfigError("channels entries must be objects");
+            }
+            appendChannelObject(item.get<picojson::object>(), out);
+        }
+    }
+    return out;
 }
 
 bool isRuntimeKey(std::string const& key)
@@ -382,11 +622,57 @@ Config parseConfig(std::map<std::string, std::string> const& values, std::vector
         throw ConfigError("ENCODER must be auto, nvenc, or x264");
     }
     cfg.monitor_public_ip = valueOr(values, "MONITOR_PUBLIC_IP", "");
+    if (cfg.monitor_public_ip.empty())
+    {
+        cfg.monitor_public_ip = firstNonLoopbackIpv4();
+    }
+    if (cfg.monitor_public_ip.empty())
+    {
+        throw ConfigError("MONITOR_PUBLIC_IP is unset and no non-loopback IPv4 address was found");
+    }
+    validateAnnounceAddress("MONITOR_PUBLIC_IP", cfg.monitor_public_ip);
+    cfg.nmos_host_address = valueOr(values, "NMOS_HOST_ADDRESS", "");
+    if (cfg.nmos_host_address.empty())
+    {
+        cfg.nmos_host_address = cfg.monitor_public_ip;
+    }
+    validateAnnounceAddress("NMOS_HOST_ADDRESS", cfg.nmos_host_address);
     cfg.monitor_whep_public_url = normalizePublicBaseUrl("MONITOR_WHEP_PUBLIC_URL", valueOr(values, "MONITOR_WHEP_PUBLIC_URL", ""));
     cfg.monitor_hls_public_url = normalizePublicBaseUrl("MONITOR_HLS_PUBLIC_URL", valueOr(values, "MONITOR_HLS_PUBLIC_URL", ""));
+    cfg.state_dir = valueOr(values, "STATE_DIR", cfg.state_dir);
+    while (cfg.state_dir.size() > 1 && cfg.state_dir.back() == '/')
+    {
+        cfg.state_dir.pop_back();
+    }
+    if (cfg.state_dir.empty() || cfg.state_dir.front() != '/')
+    {
+        throw ConfigError("STATE_DIR must be an absolute path");
+    }
+    cfg.shutdown_timeout_s = parseInt("SHUTDOWN_TIMEOUT_S", valueOr(values, "SHUTDOWN_TIMEOUT_S", "10"), 1, 120);
+    if (!parseBool(valueOr(values, "MXL_CLEANUP_ON_EXIT", "false"), &cfg.mxl_cleanup_on_exit))
+    {
+        throw ConfigError("MXL_CLEANUP_ON_EXIT must be a boolean");
+    }
+    cfg.nmos_label = valueOr(values, "NMOS_LABEL", "");
+    cfg.nmos_tags = parseTags(valueOr(values, "NMOS_TAGS", ""));
     cfg.mediamtx_rtsp_url = valueOr(values, "MEDIAMTX_RTSP_URL", cfg.mediamtx_rtsp_url);
     cfg.mediamtx_api_url = valueOr(values, "MEDIAMTX_API_URL", cfg.mediamtx_api_url);
-    cfg.mediamtx_config_path = valueOr(values, "MEDIAMTX_CONFIG_PATH", cfg.mediamtx_config_path);
+    if (values.find("MEDIAMTX_CONFIG_PATH") == values.end())
+    {
+        cfg.mediamtx_config_path = cfg.state_dir + "/mediamtx.yml";
+    }
+    else
+    {
+        cfg.mediamtx_config_path = values.at("MEDIAMTX_CONFIG_PATH");
+    }
+    if (values.find("MEDIAMTX_METRICS_PORT") == values.end() || values.at("MEDIAMTX_METRICS_PORT").empty() || values.at("MEDIAMTX_METRICS_PORT") == "0")
+    {
+        cfg.mediamtx_metrics_port = 0;
+    }
+    else
+    {
+        cfg.mediamtx_metrics_port = parseInt("MEDIAMTX_METRICS_PORT", values.at("MEDIAMTX_METRICS_PORT"), 1, 65535);
+    }
     cfg.mediamtx_whep_port = parseInt("MEDIAMTX_WHEP_PORT", valueOr(values, "MEDIAMTX_WHEP_PORT", "8889"), 1, 65535);
     cfg.mediamtx_hls_port = parseInt("MEDIAMTX_HLS_PORT", valueOr(values, "MEDIAMTX_HLS_PORT", "8888"), 1, 65535);
     cfg.mediamtx_ice_udp_port = parseInt("MEDIAMTX_ICE_UDP_PORT", valueOr(values, "MEDIAMTX_ICE_UDP_PORT", "8189"), 1, 65535);
@@ -396,6 +682,15 @@ Config parseConfig(std::map<std::string, std::string> const& values, std::vector
     }
     cfg.nmos_registry_address = valueOr(values, "NMOS_REGISTRY_ADDRESS", "");
     cfg.nmos_registry_port = parseInt("NMOS_REGISTRY_PORT", valueOr(values, "NMOS_REGISTRY_PORT", "3210"), 1, 65535);
+    cfg.nmos_query_address = valueOr(values, "NMOS_QUERY_ADDRESS", "");
+    if (values.find("NMOS_QUERY_PORT") == values.end() || values.at("NMOS_QUERY_PORT").empty())
+    {
+        cfg.nmos_query_port = 0;
+    }
+    else
+    {
+        cfg.nmos_query_port = parseInt("NMOS_QUERY_PORT", values.at("NMOS_QUERY_PORT"), 1, 65535);
+    }
     if (!parseBool(valueOr(values, "NMOS_DNS_SD", "false"), &cfg.nmos_dns_sd))
     {
         throw ConfigError("NMOS_DNS_SD must be a boolean");
@@ -417,10 +712,6 @@ Config parseConfig(std::map<std::string, std::string> const& values, std::vector
         throw ConfigError("METRICS_AUDIO_PEAK must be a boolean");
     }
     cfg.config_file = valueOr(values, "MONITOR_CONFIG_FILE", "");
-    if (cfg.monitor_public_ip.empty())
-    {
-        cfg.monitor_public_ip = firstNonLoopbackIpv4();
-    }
 
     cfg.channels.clear();
     for (int i = 1; i <= cfg.monitor_channels; ++i)
@@ -498,8 +789,17 @@ std::map<std::string, std::string> configToMap(Config const& cfg)
     out["READ_OFFSET_GRAINS"] = std::to_string(cfg.read_offset_grains);
     out["ENCODER"] = cfg.encoder;
     out["MONITOR_PUBLIC_IP"] = cfg.monitor_public_ip;
+    out["NMOS_HOST_ADDRESS"] = cfg.nmos_host_address;
     out["MONITOR_WHEP_PUBLIC_URL"] = cfg.monitor_whep_public_url;
     out["MONITOR_HLS_PUBLIC_URL"] = cfg.monitor_hls_public_url;
+    out["STATE_DIR"] = cfg.state_dir;
+    out["SHUTDOWN_TIMEOUT_S"] = std::to_string(cfg.shutdown_timeout_s);
+    out["MXL_CLEANUP_ON_EXIT"] = cfg.mxl_cleanup_on_exit ? "true" : "false";
+    out["NMOS_LABEL"] = cfg.nmos_label;
+    out["NMOS_TAGS"] = tagsToJson(cfg.nmos_tags);
+    out["NMOS_QUERY_ADDRESS"] = cfg.queryHost();
+    out["NMOS_QUERY_PORT"] = std::to_string(cfg.queryPort());
+    out["MEDIAMTX_METRICS_PORT"] = std::to_string(cfg.mediamtx_metrics_port);
     out["MEDIAMTX_RTSP_URL"] = cfg.mediamtx_rtsp_url;
     out["MEDIAMTX_API_URL"] = cfg.mediamtx_api_url;
     out["MEDIAMTX_CONFIG_PATH"] = cfg.mediamtx_config_path;
@@ -704,23 +1004,7 @@ std::map<std::string, std::string> loadConfigFile(std::string const& path, std::
             }
             continue;
         }
-        if (value.is<std::string>())
-        {
-            out[key] = value.get<std::string>();
-        }
-        else if (value.is<bool>())
-        {
-            out[key] = value.get<bool>() ? "true" : "false";
-        }
-        else if (value.is<double>())
-        {
-            auto const n = value.get<double>();
-            out[key] = std::to_string(static_cast<long long>(n));
-        }
-        else
-        {
-            throw ConfigError("unsupported config value for " + key);
-        }
+        out[key] = settingText(key, value);
     }
     return out;
 }

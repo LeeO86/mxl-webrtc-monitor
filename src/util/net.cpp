@@ -27,7 +27,7 @@ std::string firstNonLoopbackIpv4()
     {
         return "127.0.0.1";
     }
-    std::string found = "127.0.0.1";
+    std::string found;
     for (auto* it = list; it != nullptr; it = it->ifa_next)
     {
         if (it->ifa_addr == nullptr || it->ifa_addr->sa_family != AF_INET)

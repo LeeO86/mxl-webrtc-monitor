@@ -26,10 +26,10 @@ std::string renderMediamtxConfig(Config const& cfg)
         }
         rtspAddr = host + ":" + std::to_string(rtsp->second);
     }
-    int metricsPort = 9998;
-    if (api && api->second > 0)
+    int metricsPort = cfg.mediamtx_metrics_port;
+    if (metricsPort <= 0)
     {
-        metricsPort = api->second + 1;
+        metricsPort = api && api->second > 0 ? api->second + 1 : 9998;
     }
     std::string yml;
     yml += "logLevel: info\n";

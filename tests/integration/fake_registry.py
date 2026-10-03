@@ -85,6 +85,21 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, body or b"{}")
 
     def do_DELETE(self):
+        path = self.path.split("?", 1)[0]
+        with LOCK:
+            RESOURCES.pop(path, None)
+            marker = "/resource/"
+            if marker in path:
+                rest = path.split(marker, 1)[1].strip("/")
+                parts = rest.split("/")
+                if len(parts) >= 2:
+                    collection, rid = parts[0], parts[1]
+                    singular = collection[:-1] if collection.endswith("s") else collection
+                    RESOURCES.pop(singular + ":" + rid, None)
+                    RESOURCES.pop("/x-nmos/query/v1.3/" + collection + "/" + rid, None)
+                    drop = [key for key, value in RESOURCES.items() if isinstance(value, dict) and value.get("id") == rid]
+                    for key in drop:
+                        RESOURCES.pop(key, None)
         self._send(204, b"")
 
     def do_OPTIONS(self):

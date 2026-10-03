@@ -76,6 +76,42 @@ Config ConfigStore::updateFile(std::map<std::string, std::string> const& patch, 
     return cfg_;
 }
 
+Config ConfigStore::importDocument(std::map<std::string, std::string> const& settings)
+{
+    std::lock_guard const lock{mu_};
+    std::map<std::string, std::string> filtered;
+    bool restart = false;
+    for (auto const& [key, value] : settings)
+    {
+        auto const it = origin_.find(key);
+        if (it != origin_.end() && it->second == ValueOrigin::Env)
+        {
+            continue;
+        }
+        filtered[key] = value;
+        if (!isRuntimeKey(key))
+        {
+            restart = true;
+        }
+    }
+    auto origin = origin_;
+    auto const configFile = cfg_.config_file;
+    auto next = loadLayered(filtered, env_, {}, &origin);
+    if (next.config_file.empty())
+    {
+        next.config_file = configFile;
+    }
+    file_ = std::move(filtered);
+    cfg_ = std::move(next);
+    origin_ = std::move(origin);
+    if (restart)
+    {
+        restart_ = true;
+    }
+    persistUnlocked();
+    return cfg_;
+}
+
 void ConfigStore::replaceFile(std::map<std::string, std::string> const& fileLayer)
 {
     std::lock_guard const lock{mu_};

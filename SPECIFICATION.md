@@ -108,7 +108,8 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
 
 ### 4.1 Node and resources
 
-- One nmos-cpp Node per container, one Device ("MXL WebRTC Monitor").
+- One nmos-cpp Node per container, one Device. The node label is `NMOS_LABEL`, or `HOST_ID` when that is empty. The device label is `MXL WebRTC Monitor`, or `<NMOS_LABEL> WebRTC Monitor` when the label is set.
+- `NMOS_TAGS` is a JSON object of tag name to array of strings. Those tags are added to the node and device. Receiver group hints stay.
 - `MONITOR_CHANNELS` (default 4, max 16) channels. Each channel has:
   - one video receiver, `transport: urn:x-nmos:transport:mxl`, format
     `urn:x-nmos:format:video`;
@@ -123,13 +124,18 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
   `video/v210a` if supported by the pinned MXL; key is ignored), any resolution and
   rate listed in a configurable set (default: 1080i/p and 2160p at 25/29.97/50/59.94);
   audio `audio/float32`, 1 to 64 channels, 48 kHz.
-- Registration: static registry address (`NMOS_REGISTRY_ADDRESS` / `_PORT`);
-  DNS-SD/mDNS discovery and advertisement disabled by default
-  (`NMOS_DNS_SD=false`). This matches the platform rule that nothing relies on
-  DNS-SD.
+- Registration: static registry address (`NMOS_REGISTRY_ADDRESS` / `_PORT`).
+  The Query API is `NMOS_QUERY_ADDRESS` (default: the registry address) on
+  `NMOS_QUERY_PORT` (default: registration port + 1). DNS-SD browsing and mDNS
+  advertisement are off by default (`NMOS_DNS_SD=false`), which sets nmos-cpp
+  `pri` and `highest_pri` to `INT_MAX`. Avahi is not required in that mode.
+- The address announced on the node href, `api.endpoints[].host` and IS-05
+  control hrefs is `NMOS_HOST_ADDRESS` (default: `MONITOR_PUBLIC_IP`). It must
+  be an IP literal and must not be loopback or `0.0.0.0`.
 - Stable IDs: Node, Device and Receiver IDs are derived deterministically (UUIDv5)
-  from a configurable seed (`NMOS_SEED`, default `HOST_ID` + container name) and
+  from a configurable seed (`NMOS_SEED`, default `HOST_ID-monitor`) and
   the channel number, so they survive restarts and the crosspoint keeps its view.
+  This process has no sources, flows or senders, and it does not create an output domain.
 
 ### 4.2 IS-05 behaviour
 
@@ -143,6 +149,8 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
   error responses.
 - `master_enable: false` stops the channel's pipeline and shows the "not routed"
   state.
+- The active connection is stored in `STATE_DIR/is05.json` and restored on the
+  next start. A missing or corrupt file is ignored.
 - The IS-04 receiver `subscription` (`sender_id`, `active`) is updated on every
   activation, so the fabrics agent and the crosspoint see it.
 - Video and audio receivers of a channel are independent: audio may come from a
@@ -265,6 +273,10 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
 | PATCH | `/api/v1/channels/{n}` | per-channel settings (not routing) |
 | GET | `/api/v1/events` | WebSocket: status and meters |
 | GET/PUT | `/api/v1/config` | configuration (as siblings) |
+| GET | `/api/v1/config.env` | `KEY=value` export |
+| GET | `/api/v1/config/export` | one JSON document of settings and channel keys |
+| POST | `/api/v1/config/import` | restore that document into `MONITOR_CONFIG_FILE` |
+| GET | `/api/v1/nmos` | node id, registry and receiver state |
 
 Routing is only via IS-05. The UI MUST NOT offer a source picker in v1.
 
@@ -278,8 +290,15 @@ mediamtx reachable), `/statusz`, `/metrics` — on `WEB_PORT`.
 ## 7. Configuration
 
 Environment variables over an optional JSON file (`MONITOR_CONFIG_FILE`) over
-defaults; invalid configuration exits 78; global keys changed in the UI are flagged
-`restart_required`; per-channel settings apply at runtime.
+defaults. Unknown environment variables are ignored. Unknown keys in the JSON
+file, and invalid values, exit 78 with a message on stderr. This process has
+no secrets; they are never logged, and `/api/v1/config/export` sets
+`secrets_included` to false. App-written state (`is05.json`, and `mediamtx.yml`
+unless `MEDIAMTX_CONFIG_PATH` is set) lives only under `STATE_DIR` (default
+`/config`). Global keys changed in the UI are flagged `restart_required`;
+per-channel settings apply at runtime. `POST /api/v1/config/import` restores a
+document from `GET /api/v1/config/export` into the config file and skips keys
+that the environment owns. It returns 409 when `MONITOR_CONFIG_FILE` is unset.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -292,18 +311,26 @@ defaults; invalid configuration exits 78; global keys changed in the UI are flag
 | `MONITOR_AUDIO_BITRATE_KBPS` | 128 | per channel |
 | `READ_OFFSET_GRAINS` | 2 | read behind head |
 | `ENCODER` | `auto` | `auto`, `nvenc`, `x264` |
-| `MONITOR_PUBLIC_IP` | first non-loopback IP | address given to browsers for ICE |
-| `MONITOR_WHEP_PUBLIC_URL` | empty | public base URL of WHEP, no path; empty keeps `http://MONITOR_PUBLIC_IP:MEDIAMTX_WHEP_PORT` |
-| `MONITOR_HLS_PUBLIC_URL` | empty | public base URL of HLS, no path; empty keeps `http://MONITOR_PUBLIC_IP:MEDIAMTX_HLS_PORT` |
+| `MONITOR_PUBLIC_IP` | first non-loopback IPv4 | ICE host (`webrtcAdditionalHosts`) and the default for `NMOS_HOST_ADDRESS`. Must be an IP literal, not loopback and not `0.0.0.0` |
+| `NMOS_HOST_ADDRESS` | `MONITOR_PUBLIC_IP` | IP announced on the IS-04 href, API endpoints and IS-05 control hrefs |
+| `MONITOR_WHEP_PUBLIC_URL` | empty | public base URL of WHEP, no path; empty keeps `http://MONITOR_PUBLIC_IP:MEDIAMTX_WHEP_PORT`. A TLS hostname is allowed here |
+| `MONITOR_HLS_PUBLIC_URL` | empty | public base URL of HLS, no path; empty keeps `http://MONITOR_PUBLIC_IP:MEDIAMTX_HLS_PORT`. A TLS hostname is allowed here |
+| `STATE_DIR` | `/config` | directory for generated state (`mediamtx.yml` unless overridden, and `is05.json`) |
+| `SHUTDOWN_TIMEOUT_S` | 10 | seconds allowed after SIGTERM before exit 143 is forced |
+| `MXL_CLEANUP_ON_EXIT` | false | accepted; this monitor owns no output domain, so `true` only logs and deletes nothing |
+| `NMOS_LABEL` | empty | node label; device label prefix. Empty keeps `HOST_ID` and `MXL WebRTC Monitor` |
+| `NMOS_TAGS` | `{}` | JSON object of tag name to array of strings, on the node and device |
 | `MEDIAMTX_RTSP_URL` | `rtsp://127.0.0.1:8554` | sidecar ingest |
 | `MEDIAMTX_API_URL` | `http://127.0.0.1:9997` | sidecar API |
-| `MEDIAMTX_CONFIG_PATH` | `/config/mediamtx.yml` | generated config for the sidecar |
+| `MEDIAMTX_CONFIG_PATH` | `STATE_DIR/mediamtx.yml` | generated config for the sidecar |
 | `MEDIAMTX_WHEP_PORT` / `_HLS_PORT` / `_ICE_UDP_PORT` | 8889 / 8888 / 8189 | written into the generated config |
+| `MEDIAMTX_METRICS_PORT` | API port + 1 | sidecar Prometheus port written into the generated config. `0` means the default |
 | `NMOS_ENABLE` | true | |
-| `NMOS_REGISTRY_ADDRESS` / `_PORT` | empty / 3210 | static registry |
-| `NMOS_DNS_SD` | false | enable DNS-SD discovery/advertisement |
-| `NMOS_PORT` | 3242 | Node API (WebSocket on `NMOS_PORT+1`) |
-| `NMOS_SEED` | `HOST_ID` + `-monitor` | deterministic IDs |
+| `NMOS_REGISTRY_ADDRESS` / `_PORT` | empty / 3210 | static registration API |
+| `NMOS_QUERY_ADDRESS` / `_PORT` | registry address / registry port + 1 | Query API used for readiness and sender labels |
+| `NMOS_DNS_SD` | false | enable DNS-SD discovery and mDNS advertisement |
+| `NMOS_PORT` | 3242 | Node API. The Node WebSocket is `NMOS_PORT+1` |
+| `NMOS_SEED` | `HOST_ID-monitor` | UUIDv5 seed for the node, device and receivers |
 | `WEB_PORT` | 8100 | UI, REST, health, metrics |
 | `LOG_LEVEL` | `info` | JSON logs |
 
@@ -361,11 +388,18 @@ scraped separately.
 - Runtime requirements: host networking; MXL root mounted read-only; runs as
   `1000:1000` (or `supplementalGroups: [1000]`); GPU optional
   (`runtimeClassName: nvidia`, `nvidia.com/gpu: 1`); no extra capabilities.
-- Exit codes as siblings: 0 clean, 75 startup failed after retries, 78 invalid
-  configuration, 143 shutdown grace exceeded.
-- CI as siblings: build, unit and integration tests, GHCR image
-  `ghcr.io/leeo86/mxl-webrtc-monitor`, tags `vX.Y.Z` → `X.Y.Z`, `X.Y`, `X`,
-  `latest` + release; `main` → `nightly-dev`; every build → `git-<sha>`.
+- Exit codes: 0 is unused on the signal path, 75 a listening port could not be
+  bound or startup failed, 78 invalid configuration, 143 SIGTERM or SIGINT
+  completed the shutdown sequence (or `SHUTDOWN_TIMEOUT_S` elapsed). On
+  SIGTERM the process stops media and releases MXL readers, erases the NMOS
+  node from the model so the registry receives DELETE, logs that it owns no
+  output domain when `MXL_CLEANUP_ON_EXIT=true`, and exits 143.
+- CI: build, unit and integration tests, GHCR image
+  `ghcr.io/leeo86/mxl-webrtc-monitor`. A `vX.Y.Z` tag publishes `X.Y.Z`, `X.Y`
+  and `X`. `main` publishes `git-<sha7>` and `nightly-dev`. Image tags are not
+  moved except those floating tags. The runtime user is uid 1000. OCI labels
+  include `org.opencontainers.image.source`, `.revision`, `.licenses` and
+  `io.dmf.mxl.revision` (the pinned MXL commit).
 - **Docker Compose** (`docker/`):
   - `docker-compose.demo.yaml`: single machine, no GPU required: nmos-cpp
     registry, a test MXL writer (mxl-decklink in mock mode or the CBC

@@ -211,6 +211,32 @@ HttpResponse Api::handle(HttpRequest const& request)
         response.body = configToEnv(cfg);
         return response;
     }
+    if (request.method == "GET" && request.path == "/api/v1/config/export")
+    {
+        return {200, "application/json", exportConfigDocument(cfg)};
+    }
+    if (request.method == "POST" && request.path == "/api/v1/config/import")
+    {
+        if (cfg.config_file.empty())
+        {
+            return {409, "application/json", "{\"error\":\"MONITOR_CONFIG_FILE is not set\"}"};
+        }
+        try
+        {
+            auto const settings = settingsFromImport(request.body);
+            auto const updated = store_->importDocument(settings);
+            book_->reset(updated);
+            for (auto const& channel : updated.channels)
+            {
+                book_->setSettings(channel.index, channel);
+            }
+        }
+        catch (ConfigError const& ex)
+        {
+            return {400, "application/json", std::string("{\"error\":") + jsonString(ex.what()) + "}"};
+        }
+        return {200, "application/json", configToJson(store_->get(), store_->origins(), store_->restartRequired())};
+    }
     if ((request.method == "PATCH") && request.path.rfind("/api/v1/channels/", 0) == 0)
     {
         auto const suffix = request.path.substr(std::string("/api/v1/channels/").size());

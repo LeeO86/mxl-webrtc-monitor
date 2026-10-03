@@ -71,13 +71,20 @@ export MEDIAMTX_ICE_UDP_PORT="$ICE_PORT"
 export ENCODER=x264
 export MONITOR_PREVIEW_HEIGHT=270
 export MONITOR_VIDEO_BITRATE_KBPS=800
-export MONITOR_PUBLIC_IP=127.0.0.1
+unset MONITOR_PUBLIC_IP || true
 export MONITOR_HLS_PUBLIC_URL="http://127.0.0.1:${HLS_PORT}"
 export LOG_LEVEL=info
 export READ_OFFSET_GRAINS=1
+export STATE_DIR="$WORKDIR/state"
+export SHUTDOWN_TIMEOUT_S=10
+export MXL_CLEANUP_ON_EXIT=true
+
+mkdir -p "$WORKDIR/mxl/decoy-other"
+printf '%s\n' '{"id":"11111111-1111-4111-8111-111111111111"}' >"$WORKDIR/mxl/decoy-other/domain_def.json"
 
 "$BIN" >"$WORKDIR/monitor.log" 2>&1 &
-PIDS+=($!)
+MONITOR_PID=$!
+PIDS+=("$MONITOR_PID")
 
 for _ in $(seq 1 50); do
   if [[ -f "$WORKDIR/mediamtx.yml" ]]; then
@@ -150,10 +157,15 @@ if playback["hls"] != base + "/ch1/index.m3u8":
     raise SystemExit("hls url %s" % playback["hls"])
 if playback["public"]["hls"] is not True or playback["public"]["whep"] is not False:
     raise SystemExit("public flags %s" % playback["public"])
-if not playback["whep"].startswith("http://127.0.0.1:"):
-    raise SystemExit("whep url %s" % playback["whep"])
+whep = playback["whep"]
+suffix = ":%s/ch1/whep" % sys.argv[3]
+if not whep.startswith("http://") or not whep.endswith(suffix):
+    raise SystemExit("whep url %s" % whep)
+host = whep[len("http://"):-len(suffix)]
+if host in ("127.0.0.1", "0.0.0.0") or any(c.isalpha() for c in host):
+    raise SystemExit("whep url %s" % whep)
 print(playback["hls"])
-' "$channels_json" "$MONITOR_HLS_PUBLIC_URL")"
+' "$channels_json" "$MONITOR_HLS_PUBLIC_URL" "$WHEP_PORT")"
 echo "hls public url $HLS_INDEX"
 
 hls_has_segments() {
@@ -209,6 +221,49 @@ ready="$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:${WEB_PORT}/r
 if [[ "$ready" != "200" ]]; then
   echo "readyz=$ready" >&2
   curl -sS "http://127.0.0.1:${WEB_PORT}/readyz" >&2 || true
+  exit 1
+fi
+
+if ! grep -q "$VIDEO2_ID" "$STATE_DIR/is05.json"; then
+  echo "is05 state was not saved" >&2
+  cat "$STATE_DIR/is05.json" >&2 || true
+  exit 1
+fi
+
+NODE_ID="$(curl -sf "http://127.0.0.1:${WEB_PORT}/api/v1/nmos" | python3 -c 'import json,sys; print(json.load(sys.stdin)["node_id"])')"
+registered="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$((REG_PORT + 1))/x-nmos/query/v1.3/nodes/${NODE_ID}" || true)"
+if [[ "$registered" != "200" ]]; then
+  echo "node was not registered ($registered)" >&2
+  exit 1
+fi
+
+kill -TERM "$MONITOR_PID"
+set +e
+wait "$MONITOR_PID"
+status=$?
+set -e
+if [[ "$status" != "143" ]]; then
+  echo "shutdown exit $status" >&2
+  tail -n 80 "$WORKDIR/monitor.log" >&2 || true
+  exit 1
+fi
+
+gone=""
+for _ in $(seq 1 20); do
+  code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$((REG_PORT + 1))/x-nmos/query/v1.3/nodes/${NODE_ID}" || true)"
+  if [[ "$code" == "404" ]]; then
+    gone=1
+    break
+  fi
+  sleep 0.25
+done
+if [[ -z "$gone" ]]; then
+  echo "node still registered after SIGTERM" >&2
+  tail -n 40 "$WORKDIR/registry.log" >&2 || true
+  exit 1
+fi
+if [[ ! -f "$WORKDIR/mxl/decoy-other/domain_def.json" ]]; then
+  echo "cleanup removed a domain this monitor does not own" >&2
   exit 1
 fi
 echo "integration ok"

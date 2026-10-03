@@ -11,7 +11,7 @@ services:
     command: ["python", "/fake_registry.py", "3210", "3211"]
 
   writer:
-    image: ghcr.io/leeo86/mxl-webrtc-monitor:nightly-dev
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.0
     network_mode: host
     user: "0:0"
     entrypoint: ["/usr/local/bin/mxl-flow-writer"]
@@ -39,7 +39,7 @@ services:
         exec /mediamtx /config/mediamtx.yml
 
   monitor:
-    image: ghcr.io/leeo86/mxl-webrtc-monitor:nightly-dev
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.0
     network_mode: host
     depends_on:
       - registry
@@ -57,7 +57,11 @@ services:
       MEDIAMTX_CONFIG_PATH: /config/mediamtx.yml
       MEDIAMTX_RTSP_URL: rtsp://127.0.0.1:8554
       MEDIAMTX_API_URL: http://127.0.0.1:9997
-      MONITOR_PUBLIC_IP: 127.0.0.1
+      MONITOR_WHEP_PUBLIC_URL: http://127.0.0.1:8889
+      MONITOR_HLS_PUBLIC_URL: http://127.0.0.1:8888
+      STATE_DIR: /config
+      SHUTDOWN_TIMEOUT_S: "10"
+      MXL_CLEANUP_ON_EXIT: "true"
     volumes:
       - /dev/shm:/dev/shm:ro
       - mtx-config:/config
