@@ -326,11 +326,11 @@ private:
         {
             return "x264";
         }
-        if (forcedEncoder_ == "nvenc" && allowNvenc && elementReady("nvh264enc"))
+        if (forcedEncoder_ == "nvenc" && allowNvenc && elementReady("nvcudah264enc"))
         {
             return "nvenc";
         }
-        if (forcedEncoder_ == "auto" && allowNvenc && elementReady("nvh264enc"))
+        if (forcedEncoder_ == "auto" && allowNvenc && elementReady("nvcudah264enc"))
         {
             return "nvenc";
         }
@@ -398,8 +398,12 @@ private:
         launch += "textoverlay name=ovl text=\"\" valignment=top halignment=left font-desc=\"Sans 18\" ! ";
         if (encoder == "nvenc")
         {
-            launch += "nvh264enc name=enc bitrate=" + std::to_string(settings.video_bitrate_kbps) + " gop-size=" + std::to_string(gop) +
-                      " rc-mode=cbr preset=low-latency-hq zerolatency=true ! ";
+            // nvcudah264enc takes the P1-P7 presets that current drivers require; the
+            // legacy nvh264enc presets fail at caps time ("Selected preset not supported").
+            // It only takes NV12 or Y444 in system memory.
+            launch += "videoconvert ! video/x-raw,format=NV12 ! ";
+            launch += "nvcudah264enc name=enc bitrate=" + std::to_string(settings.video_bitrate_kbps) + " gop-size=" + std::to_string(gop) +
+                      " rate-control=cbr preset=p1 tune=ultra-low-latency zero-reorder-delay=true ! ";
         }
         else
         {
@@ -542,6 +546,18 @@ private:
                 gchar* debug = nullptr;
                 gst_message_parse_error(message, &error, &debug);
                 log::warn("pipeline_bus_error", {{"channel", std::to_string(index_)}, {"error", error != nullptr ? error->message : ""}, {"debug", debug != nullptr ? debug : ""}});
+                // An NVENC session can also fail after PLAYING (caps negotiation).
+                // Rebuild that channel with x264 instead of retrying NVENC.
+                if (std::strcmp(GST_OBJECT_NAME(GST_MESSAGE_SRC(message)), "enc") == 0)
+                {
+                    std::lock_guard const lock{pipeMu_};
+                    if (pipeEncoder_ == "nvenc" && !wantX264_)
+                    {
+                        wantX264_ = true;
+                        fallbacks_.fetch_add(1);
+                        log::warn("encoder_fallback", {{"channel", std::to_string(index_)}, {"encoder", "x264"}});
+                    }
+                }
                 if (error != nullptr)
                 {
                     g_error_free(error);
@@ -1133,7 +1149,7 @@ struct MediaHost::Impl
 MediaHost::MediaHost(Config cfg, ChannelBook& book)
 {
     initGst();
-    bool const nv = elementReady("nvh264enc");
+    bool const nv = elementReady("nvcudah264enc");
     auto impl = std::make_unique<Impl>(std::move(cfg), book);
     impl->available = nv ? "nvenc,x264" : "x264";
     std::string forced = impl->cfg.encoder;

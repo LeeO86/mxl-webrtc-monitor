@@ -155,3 +155,13 @@ See `AGENTS.md`.
 ## Hardware check (not in CI)
 
 On an A4000 and an L4: `ENCODER=auto` with 4 channels and with 16 channels, WebRTC from an operator desk, and HLS with UDP blocked. Confirm `encoder` in `/api/v1/channels` is `nvenc`, and that a channel whose NVENC session fails reports `x264` and increments `mxl_webrtc_monitor_encoder_fallbacks_total`.
+
+Lab run 2026-10-03 on an NVIDIA A16 (not a target GPU; one GA107 of the board, driver 595.84, MediaMTX 1.21.1, 2× Xeon Gold 6136). Sources were 1080p50 v210 flows (mxl-test-player outputs with audio on channels 1–4, solid-colour writers on the rest), default preview 540p at source rate, 2 Mbit/s. Each case ran 15 s warm-up and 40–60 s measured.
+
+| Encoder | Channels | `encoder` reported | Encoded fps (sum) | Mean encode latency | Drops | Fallbacks | Process CPU | NVENC load |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| auto | 4 | nvenc ×4 | 200 | 11.3 ms | 0 | 0 | 2.6 cores | 8 % |
+| auto | 16 | nvenc ×16 | 802 | 12.6 ms | 0 | 0 | 10.2 cores | 31 % |
+| x264 | 16 | x264 ×16 | 798 | 12.7 ms | 0 | 0 | 14.6 cores | – |
+
+Image 1.0.0 did not pass: `nvh264enc` failed with "Selected preset not supported" on every channel and retried forever, and the MediaMTX sidecar did not start from the Compose file. Both are fixed (see CHANGELOG). The fallback path was checked by building the legacy preset back in: each channel logged `encoder_fallback`, reported `x264` and `encoder_fallbacks_total` 1. The LL-HLS playlist was fetched with curl. Browser WebRTC from an operator desk and HLS with UDP blocked were not run.

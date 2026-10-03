@@ -12,7 +12,7 @@ This document records how `SPECIFICATION.md` (draft v0.1) is implemented.
 | mediamtx | `bluenviron/mediamtx:1.20.1` |
 | UI | Vue 3 and hls.js, bundled into one HTML file. No CDN |
 
-GStreamer packages on Ubuntu 24.04: `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`, `gstreamer1.0-plugins-bad`, `gstreamer1.0-plugins-ugly`, `gstreamer1.0-libav`, `gstreamer1.0-rtsp`, `gstreamer1.0-x`, `gstreamer1.0-tools`, plus the matching `-dev` packages and `libgstrtspserver-1.0-dev` at build time. `textoverlay` comes from `gstreamer1.0-x`. `nvh264enc` is selected when that element factory reaches `READY`; the Ubuntu package set does not ship a working NVENC plugin without the NVIDIA userspace driver, and the process falls back to x264.
+GStreamer packages on Ubuntu 24.04: `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`, `gstreamer1.0-plugins-bad`, `gstreamer1.0-plugins-ugly`, `gstreamer1.0-libav`, `gstreamer1.0-rtsp`, `gstreamer1.0-x`, `gstreamer1.0-tools`, plus the matching `-dev` packages and `libgstrtspserver-1.0-dev` at build time. `textoverlay` comes from `gstreamer1.0-x`. `nvcudah264enc` is selected when that element factory reaches `READY`; the Ubuntu package set does not ship a working NVENC plugin without the NVIDIA userspace driver, and the process falls back to x264.
 
 ## 2. Deviations
 
@@ -26,8 +26,9 @@ GStreamer packages on Ubuntu 24.04: `gstreamer1.0-plugins-base`, `gstreamer1.0-p
 8. **Unrouted audio omits the audio track.** Routed audio that has not produced samples yet pushes digital silence so the player keeps a continuous timeline.
 9. **DNS-SD off** sets nmos-cpp `pri` and `highest_pri` to `no_priority`, which disables advertisement and discovery. `NMOS_DNS_SD=true` leaves the nmos-cpp defaults.
 10. **Per-channel settings** are `CH<n>_*` environment keys and a `channels` array in the JSON file. They apply at runtime. Global keys changed through the UI set `restart_required`.
-11. **x264 uses `ultrafast` and `tune=zerolatency`**, GOP of about one second, no B-frames. NVENC asks for CBR, `low-latency-hq`, and `zerolatency` when the element accepts those properties.
+11. **x264 uses `ultrafast` and `tune=zerolatency`**, GOP of about one second, no B-frames. NVENC is `nvcudah264enc` with CBR, preset `p1`, tune `ultra-low-latency` and zero reorder delay, fed NV12. The spec names `nvh264enc`; its legacy presets fail on current drivers (deviation 13).
 12. **The demo Compose registry is the Python stand-in** in `tests/integration/fake_registry.py`. It implements the registration and query calls this process makes. A facility deployment sets `NMOS_REGISTRY_ADDRESS` to a real registry.
+13. **NVENC element is `nvcudah264enc`, not `nvh264enc` (spec §5.5).** With driver 595.84 `nvh264enc preset=low-latency-hq` fails at caps time with "Selected preset not supported", and `nvh264enc` cannot take the P1-P7 presets. `nvcudah264enc` (GStreamer 1.24, same plugin) can. An encoder error after PLAYING also falls back to x264 for that channel, as §5.5 asks for session failures.
 
 ## 3. Process
 
@@ -39,7 +40,7 @@ The video thread publishes an H.264 elementary stream. The audio thread publishe
 
 - Unit tests cover config precedence, IS-05 UUID validation, UUIDv5 ids, the channel state machine, domain scan including mirror domains, audio pair selection, backoff, public WHEP/HLS URL parsing, announce-address checks, query-port defaults, tags, config export/import, and IS-05 state reload.
 - `tests/integration/monitor.sh` writes a v210 and float32 flow, PATCHes channel 1, waits for `running`, checks that the HLS playlist grows segments, stops the writer and expects `no_signal`, activates a missing flow and expects `waiting`, then creates that flow and expects `running` without another PATCH. It sets `MONITOR_HLS_PUBLIC_URL` and fetches the playlist through the URL the API reports. It then sends SIGTERM and expects exit 143, the node gone from the Query API, and a decoy domain left in place with `MXL_CLEANUP_ON_EXIT=true`.
-- Hardware checks in spec §10 (NVENC on A4000 and L4, 4 and 16 channels, browser WebRTC, HLS with UDP blocked) are not run in CI.
+- Hardware checks in spec §10 (NVENC on A4000 and L4, 4 and 16 channels, browser WebRTC, HLS with UDP blocked) are not run in CI. A lab run on an NVIDIA A16 is in the README ("Hardware check"); A4000, L4 and the browser checks are still open.
 
 ## 5. Public WHEP and HLS URLs
 
