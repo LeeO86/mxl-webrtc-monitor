@@ -100,9 +100,115 @@ void requireKnown(std::map<std::string, std::string> const& values)
 std::vector<std::string> configKeys()
 {
     return {"HOST_ID", "MXL_DOMAIN_SCAN_PATH", "MONITOR_CHANNELS", "MONITOR_PREVIEW_HEIGHT", "MONITOR_MAX_FPS", "MONITOR_VIDEO_BITRATE_KBPS",
-        "MONITOR_AUDIO_BITRATE_KBPS", "READ_OFFSET_GRAINS", "ENCODER", "MONITOR_PUBLIC_IP", "MEDIAMTX_RTSP_URL", "MEDIAMTX_API_URL",
-        "MEDIAMTX_CONFIG_PATH", "MEDIAMTX_WHEP_PORT", "MEDIAMTX_HLS_PORT", "MEDIAMTX_ICE_UDP_PORT", "NMOS_ENABLE", "NMOS_REGISTRY_ADDRESS",
-        "NMOS_REGISTRY_PORT", "NMOS_DNS_SD", "NMOS_PORT", "NMOS_SEED", "WEB_PORT", "LOG_LEVEL", "METRICS_AUDIO_PEAK", "MONITOR_CONFIG_FILE"};
+        "MONITOR_AUDIO_BITRATE_KBPS", "READ_OFFSET_GRAINS", "ENCODER", "MONITOR_PUBLIC_IP", "MONITOR_WHEP_PUBLIC_URL", "MONITOR_HLS_PUBLIC_URL",
+        "MEDIAMTX_RTSP_URL", "MEDIAMTX_API_URL", "MEDIAMTX_CONFIG_PATH", "MEDIAMTX_WHEP_PORT", "MEDIAMTX_HLS_PORT", "MEDIAMTX_ICE_UDP_PORT",
+        "NMOS_ENABLE", "NMOS_REGISTRY_ADDRESS", "NMOS_REGISTRY_PORT", "NMOS_DNS_SD", "NMOS_PORT", "NMOS_SEED", "WEB_PORT", "LOG_LEVEL",
+        "METRICS_AUDIO_PEAK", "MONITOR_CONFIG_FILE"};
+}
+
+std::string normalizePublicBaseUrl(std::string const& key, std::string const& value)
+{
+    if (value.empty())
+    {
+        return {};
+    }
+    auto const schemeSep = value.find("://");
+    if (schemeSep == std::string::npos || schemeSep == 0)
+    {
+        throw ConfigError(key + " must be an absolute http or https URL");
+    }
+    auto scheme = lower(value.substr(0, schemeSep));
+    if (scheme != "http" && scheme != "https")
+    {
+        throw ConfigError(key + " must be an absolute http or https URL");
+    }
+    auto rest = value.substr(schemeSep + 3);
+    if (rest.empty() || rest.find('@') != std::string::npos || rest.find(' ') != std::string::npos || rest.find('#') != std::string::npos ||
+        rest.find('?') != std::string::npos)
+    {
+        throw ConfigError(key + " must be an absolute http or https URL with a host and no path");
+    }
+    auto const slash = rest.find('/');
+    auto authority = slash == std::string::npos ? rest : rest.substr(0, slash);
+    auto const path = slash == std::string::npos ? std::string{} : rest.substr(slash);
+    if (path != "" && path != "/")
+    {
+        throw ConfigError(key + " must not include a path");
+    }
+    if (authority.empty())
+    {
+        throw ConfigError(key + " must include a host");
+    }
+    std::string host;
+    std::string port;
+    if (authority.front() == '[')
+    {
+        auto const end = authority.find(']');
+        if (end == std::string::npos || end == 1)
+        {
+            throw ConfigError(key + " must include a host");
+        }
+        host = authority.substr(0, end + 1);
+        if (end + 1 < authority.size())
+        {
+            if (authority[end + 1] != ':' || end + 2 >= authority.size())
+            {
+                throw ConfigError(key + " has an invalid port");
+            }
+            port = authority.substr(end + 2);
+        }
+    }
+    else
+    {
+        auto const colon = authority.rfind(':');
+        if (colon != std::string::npos)
+        {
+            if (authority.find(':') != colon || colon == 0 || colon + 1 >= authority.size())
+            {
+                throw ConfigError(key + " has an invalid port");
+            }
+            host = authority.substr(0, colon);
+            port = authority.substr(colon + 1);
+        }
+        else
+        {
+            host = authority;
+        }
+    }
+    if (host.empty() || host == "[" || host.back() == '.')
+    {
+        throw ConfigError(key + " must include a host");
+    }
+    if (!port.empty())
+    {
+        if (port.find_first_not_of("0123456789") != std::string::npos)
+        {
+            throw ConfigError(key + " has an invalid port");
+        }
+        try
+        {
+            auto const number = std::stoi(port);
+            if (number < 1 || number > 65535)
+            {
+                throw ConfigError(key + " has an invalid port");
+            }
+        }
+        catch (ConfigError const&)
+        {
+            throw;
+        }
+        catch (...)
+        {
+            throw ConfigError(key + " has an invalid port");
+        }
+    }
+    std::string normalized = scheme + "://" + host;
+    if (!port.empty())
+    {
+        normalized += ":";
+        normalized += port;
+    }
+    return normalized;
 }
 
 bool isRuntimeKey(std::string const& key)
@@ -276,6 +382,8 @@ Config parseConfig(std::map<std::string, std::string> const& values, std::vector
         throw ConfigError("ENCODER must be auto, nvenc, or x264");
     }
     cfg.monitor_public_ip = valueOr(values, "MONITOR_PUBLIC_IP", "");
+    cfg.monitor_whep_public_url = normalizePublicBaseUrl("MONITOR_WHEP_PUBLIC_URL", valueOr(values, "MONITOR_WHEP_PUBLIC_URL", ""));
+    cfg.monitor_hls_public_url = normalizePublicBaseUrl("MONITOR_HLS_PUBLIC_URL", valueOr(values, "MONITOR_HLS_PUBLIC_URL", ""));
     cfg.mediamtx_rtsp_url = valueOr(values, "MEDIAMTX_RTSP_URL", cfg.mediamtx_rtsp_url);
     cfg.mediamtx_api_url = valueOr(values, "MEDIAMTX_API_URL", cfg.mediamtx_api_url);
     cfg.mediamtx_config_path = valueOr(values, "MEDIAMTX_CONFIG_PATH", cfg.mediamtx_config_path);
@@ -390,6 +498,8 @@ std::map<std::string, std::string> configToMap(Config const& cfg)
     out["READ_OFFSET_GRAINS"] = std::to_string(cfg.read_offset_grains);
     out["ENCODER"] = cfg.encoder;
     out["MONITOR_PUBLIC_IP"] = cfg.monitor_public_ip;
+    out["MONITOR_WHEP_PUBLIC_URL"] = cfg.monitor_whep_public_url;
+    out["MONITOR_HLS_PUBLIC_URL"] = cfg.monitor_hls_public_url;
     out["MEDIAMTX_RTSP_URL"] = cfg.mediamtx_rtsp_url;
     out["MEDIAMTX_API_URL"] = cfg.mediamtx_api_url;
     out["MEDIAMTX_CONFIG_PATH"] = cfg.mediamtx_config_path;

@@ -293,6 +293,8 @@ defaults; invalid configuration exits 78; global keys changed in the UI are flag
 | `READ_OFFSET_GRAINS` | 2 | read behind head |
 | `ENCODER` | `auto` | `auto`, `nvenc`, `x264` |
 | `MONITOR_PUBLIC_IP` | first non-loopback IP | address given to browsers for ICE |
+| `MONITOR_WHEP_PUBLIC_URL` | empty | public base URL of WHEP, no path; empty keeps `http://MONITOR_PUBLIC_IP:MEDIAMTX_WHEP_PORT` |
+| `MONITOR_HLS_PUBLIC_URL` | empty | public base URL of HLS, no path; empty keeps `http://MONITOR_PUBLIC_IP:MEDIAMTX_HLS_PORT` |
 | `MEDIAMTX_RTSP_URL` | `rtsp://127.0.0.1:8554` | sidecar ingest |
 | `MEDIAMTX_API_URL` | `http://127.0.0.1:9997` | sidecar API |
 | `MEDIAMTX_CONFIG_PATH` | `/config/mediamtx.yml` | generated config for the sidecar |
@@ -309,6 +311,25 @@ Defaults do not collide, under host networking, with mxl-decklink (8080, 3212/32
 mxl-st2110-gateway (8090), mxl-fabrics-agent (8095, 3232/3233, 23500–23599) and
 FlowXer (9620). Running two monitors on one host requires different ports for
 both containers; the README documents this.
+
+### 7.1 Behind an HTTPS reverse proxy
+
+The UI, WHEP and HLS can each have their own hostname on a TLS proxy that
+only exposes port 443. Set `MONITOR_WHEP_PUBLIC_URL` and
+`MONITOR_HLS_PUBLIC_URL` to those absolute origins, for example
+`https://mon1-whep.small.mxl.ipla.media.int` and
+`https://mon1-hls.small.mxl.ipla.media.int`. The channel API then returns
+`<base>/ch<n>/whep` and `<base>/ch<n>/index.m3u8` with `playback.public`
+true, and the page uses those URLs unchanged.
+
+Leave both empty to keep today's URLs,
+`http://<MONITOR_PUBLIC_IP>:<port>/ch<n>/...`. The page then rewrites only
+the hostname to the host that served the UI.
+
+ICE does not go through the proxy. `MONITOR_PUBLIC_IP` is still the address
+written into `webrtcAdditionalHosts`, so media UDP (and the TCP fallback)
+reaches the node directly. A same-origin reverse proxy inside this process
+is not part of v1.
 
 ---
 

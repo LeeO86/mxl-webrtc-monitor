@@ -33,6 +33,7 @@ button.btn.secondary { background: var(--chip); color: var(--text); }
 .tile .meta { position: absolute; left: 0; right: 0; bottom: 0; padding: .4rem .55rem .5rem; background: linear-gradient(transparent, rgba(0,0,0,.78)); display: flex; justify-content: space-between; gap: .5rem; align-items: flex-end; }
 .tile .name { font-weight: 650; }
 .tile .src { color: #d5dde6; font-size: .78rem; }
+.tile .hint { color: var(--warn); font-size: .72rem; margin-top: .2rem; max-width: 28rem; }
 .badge { display: inline-block; border-radius: 99px; padding: .05rem .45rem; font-size: .72rem; font-weight: 700; background: var(--chip); }
 .badge.running { background: rgba(63,185,104,.2); color: var(--ok); }
 .badge.waiting, .badge.no_signal { background: rgba(224,168,58,.2); color: var(--warn); }

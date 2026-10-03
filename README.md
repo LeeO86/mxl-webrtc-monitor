@@ -20,6 +20,17 @@ These do not collide with mxl-decklink (8080, 3212), mxl-st2110-gateway (8090), 
 
 WebRTC needs UDP from the browser to the ICE port. If UDP is blocked, the page falls back to HLS, which is ordinary HTTP.
 
+## HTTPS reverse proxy
+
+When the UI is opened through an HTTPS proxy, set the public origins of WHEP and HLS. The page uses those URLs as given. ICE still uses `MONITOR_PUBLIC_IP` and does not go through the proxy.
+
+```bash
+MONITOR_WHEP_PUBLIC_URL=https://mon1-whep.small.mxl.ipla.media.int
+MONITOR_HLS_PUBLIC_URL=https://mon1-hls.small.mxl.ipla.media.int
+```
+
+Leave both unset when opening the UI directly at `http://<node>:<WEB_PORT>`. The page then keeps `http://<MONITOR_PUBLIC_IP>:<port>/chN/...` and only replaces the hostname with the page's hostname.
+
 ## Run a demo
 
 ```bash
