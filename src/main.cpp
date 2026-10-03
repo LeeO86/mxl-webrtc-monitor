@@ -2,6 +2,7 @@
 #include "config/config.hpp"
 #include "config/store.hpp"
 #include "media/engine.hpp"
+#include "nmos/connections.hpp"
 #include "nmos/node.hpp"
 #include "ops/api.hpp"
 #include "ops/httpserver.hpp"
@@ -20,6 +21,7 @@
 #include <cctype>
 #include <chrono>
 #include <csignal>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <thread>
@@ -134,7 +136,7 @@ void refreshLabels(mwm::Config const& cfg, mwm::ChannelBook& book)
         {
             continue;
         }
-        auto const url = "http://" + cfg.nmos_registry_address + ":" + std::to_string(cfg.nmos_registry_port + 1) + "/x-nmos/query/v1.3/senders/" + view.video.sender_id;
+        auto const url = "http://" + cfg.queryHost() + ":" + std::to_string(cfg.queryPort()) + "/x-nmos/query/v1.3/senders/" + view.video.sender_id;
         auto const response = mwm::httpGet(url, 700);
         if (response.status != 200)
         {
@@ -172,6 +174,13 @@ int main(int argc, char** argv)
             cfg.config_file = fileIt->second;
         }
         mwm::log::setLevel(cfg.log_level);
+        std::error_code stateEc;
+        std::filesystem::create_directories(cfg.state_dir, stateEc);
+        if (stateEc)
+        {
+            mwm::log::error("state_dir_failed", {{"path", cfg.state_dir}, {"error", stateEc.message()}});
+            return 75;
+        }
         std::string configError;
         if (!mwm::writeMediamtxConfig(cfg, &configError))
         {
@@ -181,6 +190,7 @@ int main(int argc, char** argv)
         mwm::log::info("startup", {{"version", mwm::kVersion}, {"host_id", cfg.host_id}, {"channels", std::to_string(cfg.monitor_channels)}});
         auto store = std::make_shared<mwm::ConfigStore>(cfg, origin, fileValues);
         auto book = std::make_shared<mwm::ChannelBook>(cfg);
+        mwm::loadConnections(cfg, *book);
         mwm::MediaHost media(cfg, *book);
         mwm::NmosNode nmos(cfg, *book);
         mwm::Api api(store, book);
@@ -247,12 +257,16 @@ int main(int argc, char** argv)
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
-        ::alarm(15);
-        nmos.stop();
+        ::alarm(static_cast<unsigned>(cfg.shutdown_timeout_s));
         media.stop();
+        if (cfg.mxl_cleanup_on_exit)
+        {
+            mwm::log::info("mxl_cleanup_skipped", {{"reason", "monitor owns no output domain"}});
+        }
+        nmos.stop();
         server.stop();
         ::alarm(0);
-        return 0;
+        return 143;
     }
     catch (mwm::ConfigError const& ex)
     {

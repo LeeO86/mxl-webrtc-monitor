@@ -1,5 +1,6 @@
 #include "nmos/node.hpp"
 
+#include "nmos/connections.hpp"
 #include "nmos/ids.hpp"
 #include "util/httpclient.hpp"
 #include "util/logging.hpp"
@@ -34,6 +35,7 @@
 #include "nmos/node_resource.h"
 #include "nmos/node_resources.h"
 #include "nmos/node_server.h"
+#include "nmos/resources.h"
 #include "nmos/server.h"
 #include "nmos/settings.h"
 #include "nmos/slog.h"
@@ -96,10 +98,9 @@ bool NmosNode::registered() const
     }
     if (impl_->cfg.nmos_registry_address.empty())
     {
-        return impl_->cfg.nmos_dns_sd;
+        return true;
     }
-    auto const url = "http://" + impl_->cfg.nmos_registry_address + ":" + std::to_string(impl_->cfg.nmos_registry_port + 1) + "/x-nmos/query/v1.3/nodes/" +
-                     impl_->ids.node;
+    auto const url = "http://" + impl_->cfg.queryHost() + ":" + std::to_string(impl_->cfg.queryPort()) + "/x-nmos/query/v1.3/nodes/" + impl_->ids.node;
     auto const response = httpGet(url, 700);
     return response.status == 200;
 }
@@ -107,8 +108,8 @@ bool NmosNode::registered() const
 std::string NmosNode::summary() const
 {
     std::string out = std::string("{\"enabled\":") + (impl_->cfg.nmos_enable ? "true" : "false") + ",\"node_id\":\"" + impl_->ids.node + "\",\"device_id\":\"" +
-                      impl_->ids.device + "\",\"device_label\":\"MXL WebRTC Monitor\",\"registry\":\"" + impl_->cfg.nmos_registry_address + "\",\"registry_port\":" +
-                      std::to_string(impl_->cfg.nmos_registry_port) + ",\"port\":" + std::to_string(impl_->cfg.nmos_port) + ",\"dns_sd\":" +
+                      impl_->ids.device + "\",\"device_label\":\"" + log::jsonEscape(deviceLabel(impl_->cfg)) + "\",\"registry\":\"" + impl_->cfg.nmos_registry_address +
+                      "\",\"registry_port\":" + std::to_string(impl_->cfg.nmos_registry_port) + ",\"port\":" + std::to_string(impl_->cfg.nmos_port) + ",\"dns_sd\":" +
                       (impl_->cfg.nmos_dns_sd ? "true" : "false") + ",\"registered\":" + (registered() ? "true" : "false") + ",\"receivers\":[";
     auto const views = impl_->book.snapshot();
     bool first = true;
@@ -172,6 +173,42 @@ void tagGroup(nmos::resource& resource, std::string const& group, std::string co
     }
     web::json::push_back(resource.data[U("tags")][U("urn:x-nmos:tag:grouphint/v1.0")], nmos::make_group_hint({us(group), us(role)}));
 }
+
+void applyPlatformTags(nmos::resource& resource, Config const& cfg)
+{
+    if (cfg.nmos_tags.empty())
+    {
+        return;
+    }
+    if (!resource.data.has_field(nmos::fields::tags))
+    {
+        resource.data[U("tags")] = web::json::value::object();
+    }
+    for (auto const& [name, values] : cfg.nmos_tags)
+    {
+        for (auto const& value : values)
+        {
+            web::json::push_back(resource.data[U("tags")][us(name)], web::json::value::string(us(value)));
+        }
+    }
+}
+
+void applyPersistedRoute(web::json::value& connection, LegRoute const& route)
+{
+    auto const domain = route.domain_id.empty() ? web::json::value::null() : web::json::value::string(us(route.domain_id));
+    auto const flow = route.flow_id.empty() ? web::json::value::null() : web::json::value::string(us(route.flow_id));
+    for (auto const* sideName : {U("active"), U("staged")})
+    {
+        auto& side = connection[sideName];
+        side[U("master_enable")] = web::json::value::boolean(route.master_enable);
+        side[U("transport_params")][0][U("mxl_domain_id")] = domain;
+        side[U("transport_params")][0][U("mxl_flow_id")] = flow;
+        if (!route.sender_id.empty())
+        {
+            side[U("sender_id")] = web::json::value::string(us(route.sender_id));
+        }
+    }
+}
 } // namespace
 
 void NmosNode::start()
@@ -191,13 +228,16 @@ void NmosNode::start()
             nmos::node_model nodeModel;
             web::json::value settings = web::json::value::object();
             settings[U("http_port")] = impl_->cfg.nmos_port;
-            settings[U("label")] = web::json::value::string(us(impl_->cfg.host_id));
+            settings[U("label")] = web::json::value::string(us(nodeLabel(impl_->cfg)));
             settings[U("description")] = web::json::value::string(U("mxl-webrtc-monitor"));
             settings[U("seed_id")] = web::json::value::string(us(impl_->ids.node));
             settings[U("service_name_prefix")] = web::json::value::string(U("mxl-webrtc-monitor"));
             settings[U("logging_level")] = 20;
             settings[U("control_protocol_ws_port")] = -1;
-            settings[U("host_address")] = web::json::value::string(us(impl_->cfg.monitor_public_ip));
+            settings[U("host_address")] = web::json::value::string(us(impl_->cfg.nmos_host_address));
+            web::json::value hostAddresses = web::json::value::array();
+            web::json::push_back(hostAddresses, web::json::value::string(us(impl_->cfg.nmos_host_address)));
+            settings[U("host_addresses")] = hostAddresses;
             if (!impl_->cfg.nmos_dns_sd)
             {
                 settings[U("pri")] = std::numeric_limits<int>::max();
@@ -207,7 +247,7 @@ void NmosNode::start()
             {
                 settings[U("registry_address")] = web::json::value::string(us(impl_->cfg.nmos_registry_address));
                 settings[U("registration_port")] = impl_->cfg.nmos_registry_port;
-                settings[U("query_port")] = impl_->cfg.nmos_registry_port + 1;
+                settings[U("query_port")] = impl_->cfg.queryPort();
             }
             nodeModel.settings = settings;
             nmos::insert_node_default_settings(nodeModel.settings);
@@ -278,6 +318,14 @@ void NmosNode::start()
                             }
                         }
                         impl_->book.setRoute(channel, kind, enable, domain, flow, sender);
+                        try
+                        {
+                            saveConnections(impl_->cfg, impl_->book);
+                        }
+                        catch (std::exception const& ex)
+                        {
+                            log::error("is05_state_save_failed", {{"error", ex.what()}});
+                        }
                         log::info("nmos_activation", {{"channel", std::to_string(channel)}, {"kind", kind == LegKind::Video ? "video" : "audio"}, {"enable", enable ? "true" : "false"},
                                                         {"domain", domain}, {"flow", flow}});
                     });
@@ -292,8 +340,9 @@ void NmosNode::start()
                         auto const clocks = web::json::value_of({nmos::make_internal_clock(nmos::clock_names::clk0)});
                         auto const interfaces = nmos::experimental::node_interfaces(nmos::get_host_interfaces(nodeModel.settings));
                         auto node = nmos::make_node(us(impl_->ids.node), clocks, nmos::make_node_interfaces(interfaces), nodeModel.settings);
-                        node.data[U("label")] = value::string(us(impl_->cfg.host_id));
+                        node.data[U("label")] = value::string(us(nodeLabel(impl_->cfg)));
                         node.data[U("description")] = value::string(U("MXL WebRTC monitor"));
+                        applyPlatformTags(node, impl_->cfg);
                         nmos::insert_resource(nodeModel.node_resources, std::move(node));
 
                         std::vector<nmos::id> receivers;
@@ -303,8 +352,9 @@ void NmosNode::start()
                             receivers.push_back(us(impl_->ids.audioReceiver(i)));
                         }
                         auto device = nmos::make_device(us(impl_->ids.device), us(impl_->ids.node), {}, receivers, nodeModel.settings);
-                        device.data[U("label")] = value::string(U("MXL WebRTC Monitor"));
+                        device.data[U("label")] = value::string(us(deviceLabel(impl_->cfg)));
                         device.data[U("description")] = value::string(U("Preview receivers"));
+                        applyPlatformTags(device, impl_->cfg);
                         nmos::insert_resource(nodeModel.node_resources, std::move(device));
 
                         std::vector<nmos::rational> rates{{25, 1}, {30000, 1001}, {50, 1}, {60000, 1001}};
@@ -365,10 +415,8 @@ void NmosNode::start()
                             for (auto const& id : {videoId, audioId})
                             {
                                 auto connection = nmos::make_connection_mxl_receiver(us(id), {});
-                                connection.data[U("active")][U("master_enable")] = web::json::value::boolean(false);
-                                connection.data[U("staged")][U("master_enable")] = web::json::value::boolean(false);
-                                connection.data[U("active")][U("transport_params")][0][U("mxl_domain_id")] = web::json::value::null();
-                                connection.data[U("active")][U("transport_params")][0][U("mxl_flow_id")] = web::json::value::null();
+                                auto const kind = id == videoId ? LegKind::Video : LegKind::Audio;
+                                applyPersistedRoute(connection.data, impl_->book.route(i, kind));
                                 nmos::insert_resource(nodeModel.connection_resources, std::move(connection));
                             }
                         }
@@ -404,6 +452,26 @@ void NmosNode::start()
             while (impl_->running.load())
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            if (!impl_->cfg.nmos_registry_address.empty())
+            {
+                {
+                    auto lock = nodeModel.write_lock();
+                    nmos::erase_resource(nodeModel.node_resources, us(impl_->ids.node), true);
+                    nodeModel.notify();
+                }
+                auto const budget = std::chrono::milliseconds(std::max(500, impl_->cfg.shutdown_timeout_s * 700));
+                auto const deadline = std::chrono::steady_clock::now() + budget;
+                while (std::chrono::steady_clock::now() < deadline)
+                {
+                    auto const url = "http://" + impl_->cfg.queryHost() + ":" + std::to_string(impl_->cfg.queryPort()) + "/x-nmos/query/v1.3/nodes/" + impl_->ids.node;
+                    auto const response = httpGet(url, 500);
+                    if (response.status == 404)
+                    {
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
             }
             {
                 auto lock = nodeModel.write_lock();

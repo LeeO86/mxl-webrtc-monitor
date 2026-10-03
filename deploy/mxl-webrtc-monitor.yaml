@@ -11,6 +11,12 @@ data:
   NMOS_REGISTRY_PORT: "3210"
   WEB_PORT: "8100"
   NMOS_PORT: "3242"
+  STATE_DIR: /config
+  SHUTDOWN_TIMEOUT_S: "10"
+  MXL_CLEANUP_ON_EXIT: "true"
+  NMOS_SEED: sport-sa-monitor
+  NMOS_LABEL: sport-sa monitor
+  NMOS_TAGS: '{"urn:x-srf:production":["sport-sa"],"urn:x-srf:function":["monitor"]}'
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -32,8 +38,11 @@ spec:
         prometheus.io/port: "8100"
         prometheus.io/path: "/metrics"
     spec:
+      # Host network: browsers send ICE to the node IP. Several monitors on one
+      # node each need their own WEB_PORT, NMOS_PORT and MediaMTX ports.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
+      terminationGracePeriodSeconds: 30
       # Pin one replica to a media node in the platform overlay:
       # nodeName: media-node-a
       securityContext:
@@ -45,23 +54,26 @@ spec:
       # runtimeClassName: nvidia
       containers:
         - name: monitor
-          image: ghcr.io/leeo86/mxl-webrtc-monitor:nightly-dev
+          image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.0
           envFrom:
             - configMapRef:
                 name: mxl-webrtc-monitor
           env:
             - name: HOST_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: spec.nodeName
+              value: monitor
             - name: MXL_DOMAIN_SCAN_PATH
               value: /Volumes/mxl
-            - name: MEDIAMTX_CONFIG_PATH
-              value: /config/mediamtx.yml
             - name: NMOS_REGISTRY_ADDRESS
-              value: ""
-            # Public origins when the UI is reached through an HTTPS proxy.
-            # ICE stays on MONITOR_PUBLIC_IP and is not proxied.
+              value: "10.0.0.10"
+            - name: NMOS_HOST_ADDRESS
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: MONITOR_PUBLIC_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            # Browser origins on the HTTPS ingress. ICE stays on MONITOR_PUBLIC_IP.
             # - name: MONITOR_WHEP_PUBLIC_URL
             #   value: https://mon1-whep.small.mxl.ipla.media.int
             # - name: MONITOR_HLS_PUBLIC_URL

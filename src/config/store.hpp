@@ -20,6 +20,8 @@ public:
     // Rejects keys whose origin is the environment. Global keys set restart_required.
     Config updateFile(std::map<std::string, std::string> const& patch, bool* restart);
     void replaceFile(std::map<std::string, std::string> const& fileLayer);
+    // Replaces the file layer. Keys whose origin is the environment are skipped.
+    Config importDocument(std::map<std::string, std::string> const& settings);
 
 private:
     void persistUnlocked();

@@ -15,14 +15,22 @@ services:
         exec /mediamtx /config/mediamtx.yml
 
   monitor:
-    image: ghcr.io/leeo86/mxl-webrtc-monitor:nightly-dev
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.0
     network_mode: host
     environment:
       MXL_DOMAIN_SCAN_PATH: /Volumes/mxl
       NMOS_REGISTRY_ADDRESS: ${NMOS_REGISTRY_ADDRESS:-}
       NMOS_REGISTRY_PORT: ${NMOS_REGISTRY_PORT:-3210}
+      NMOS_QUERY_ADDRESS: ${NMOS_QUERY_ADDRESS:-}
+      NMOS_QUERY_PORT: ${NMOS_QUERY_PORT:-}
       NMOS_DNS_SD: "false"
+      NMOS_SEED: ${NMOS_SEED:-monitor}
+      NMOS_LABEL: ${NMOS_LABEL:-}
+      NMOS_HOST_ADDRESS: ${NMOS_HOST_ADDRESS:-}
       MONITOR_PUBLIC_IP: ${MONITOR_PUBLIC_IP:-}
+      STATE_DIR: /config
+      SHUTDOWN_TIMEOUT_S: "10"
+      MXL_CLEANUP_ON_EXIT: "true"
       ENCODER: ${ENCODER:-auto}
       MONITOR_CHANNELS: ${MONITOR_CHANNELS:-4}
     volumes:

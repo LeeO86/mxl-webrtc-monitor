@@ -41,8 +41,17 @@ struct Config
     int read_offset_grains = 2;
     std::string encoder = "auto";
     std::string monitor_public_ip;
+    std::string nmos_host_address;
     std::string monitor_whep_public_url;
     std::string monitor_hls_public_url;
+    std::string state_dir = "/config";
+    int shutdown_timeout_s = 10;
+    bool mxl_cleanup_on_exit = false;
+    std::string nmos_label;
+    std::map<std::string, std::vector<std::string>> nmos_tags;
+    std::string nmos_query_address;
+    int nmos_query_port = 0;
+    int mediamtx_metrics_port = 0;
     std::string mediamtx_rtsp_url = "rtsp://127.0.0.1:8554";
     std::string mediamtx_api_url = "http://127.0.0.1:9997";
     std::string mediamtx_config_path = "/config/mediamtx.yml";
@@ -60,7 +69,24 @@ struct Config
     bool metrics_audio_peak = false;
     std::string config_file;
     std::vector<ChannelSettings> channels;
+
+    std::string queryHost() const
+    {
+        return nmos_query_address.empty() ? nmos_registry_address : nmos_query_address;
+    }
+
+    int queryPort() const
+    {
+        return nmos_query_port > 0 ? nmos_query_port : nmos_registry_port + 1;
+    }
 };
+
+std::string nodeLabel(Config const& cfg);
+std::string deviceLabel(Config const& cfg);
+std::string tagsToJson(std::map<std::string, std::vector<std::string>> const& tags);
+std::string exportConfigDocument(Config const& cfg);
+// Settings map from a config export document. Throws ConfigError on a bad document.
+std::map<std::string, std::string> settingsFromImport(std::string const& document);
 
 enum class ValueOrigin
 {
@@ -82,6 +108,7 @@ std::string configToEnv(Config const& cfg);
 // Empty is valid. Otherwise an absolute http or https URL with a host, an
 // optional port, and no path other than "/". A trailing slash is removed.
 std::string normalizePublicBaseUrl(std::string const& key, std::string const& value);
+void validateAnnounceAddress(std::string const& key, std::string const& value);
 
 std::map<std::string, std::string> environmentValues(char const* const* envp);
 std::map<std::string, std::string> loadConfigFile(std::string const& path, std::vector<ChannelSettings>* channels);
