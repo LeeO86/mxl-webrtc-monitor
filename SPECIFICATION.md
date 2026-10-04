@@ -268,7 +268,7 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/api/v1/info` | version, MXL/nmos-cpp/GStreamer/mediamtx versions, encoder availability |
+| GET | `/api/v1/info` | version, MXL/nmos-cpp/GStreamer versions, `mediamtx` (the running MediaMTX from its `/v3/info`, `unknown` when unreachable) and `mediamtx_pin` (the version of the examples), encoder availability |
 | GET | `/api/v1/channels` | channels with state, routing, format, encoder, viewers |
 | PATCH | `/api/v1/channels/{n}` | per-channel settings (not routing) |
 | GET | `/api/v1/events` | WebSocket: status and meters |

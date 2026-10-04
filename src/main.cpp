@@ -215,6 +215,10 @@ int main(int argc, char** argv)
             auto const response = mwm::httpGet(cfg.mediamtx_api_url + "/v3/paths/list", 500);
             return response.status == 200;
         });
+        api.setMediamtxVersion([cfg] {
+            auto const response = mwm::httpGet(cfg.mediamtx_api_url + "/v3/info", 500);
+            return response.status == 200 ? mwm::mediamtxVersionFromInfo(response.body) : std::string{};
+        });
         api.setNmosSummary([&] { return nmos.summary(); });
         mwm::HttpServer server;
         server.setHandler([&](mwm::HttpRequest const& request) { return api.handle(request); });

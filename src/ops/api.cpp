@@ -75,6 +75,11 @@ void Api::setMediamtxReachable(std::function<bool()> probe)
     mediamtx_ = std::move(probe);
 }
 
+void Api::setMediamtxVersion(std::function<std::string()> probe)
+{
+    mediamtxVersion_ = std::move(probe);
+}
+
 void Api::setNmosSummary(std::function<std::string()> summary)
 {
     nmosSummary_ = std::move(summary);
@@ -82,9 +87,12 @@ void Api::setNmosSummary(std::function<std::string()> summary)
 
 std::string Api::infoJson() const
 {
+    // The sidecar can run another MediaMTX than the pin of the examples.
+    auto const running = mediamtxVersion_ ? mediamtxVersion_() : std::string{};
     std::ostringstream out;
     out << "{\"version\":" << jsonString(info_.version) << ",\"mxl_version\":" << jsonString(info_.mxl_version) << ",\"nmos_cpp\":" << jsonString(info_.nmos_cpp)
-        << ",\"gstreamer\":" << jsonString(info_.gstreamer) << ",\"mediamtx\":" << jsonString(info_.mediamtx)
+        << ",\"gstreamer\":" << jsonString(info_.gstreamer) << ",\"mediamtx\":" << jsonString(running.empty() ? "unknown" : running)
+        << ",\"mediamtx_pin\":" << jsonString(info_.mediamtx)
         << ",\"encoder_available\":" << jsonString(info_.encoder_available) << "}";
     return out.str();
 }

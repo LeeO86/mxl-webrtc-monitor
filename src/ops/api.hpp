@@ -30,6 +30,7 @@ public:
     void setMetrics(std::function<std::string()> metrics);
     void setNmosRegistered(std::function<bool()> probe);
     void setMediamtxReachable(std::function<bool()> probe);
+    void setMediamtxVersion(std::function<std::string()> probe);
     void setNmosSummary(std::function<std::string()> summary);
 
     HttpResponse handle(HttpRequest const& request);
@@ -46,6 +47,7 @@ private:
     std::function<std::string()> metrics_;
     std::function<bool()> nmosRegistered_;
     std::function<bool()> mediamtx_;
+    std::function<std::string()> mediamtxVersion_;
     std::function<std::string()> nmosSummary_;
 };
 } // namespace mwm
