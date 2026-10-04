@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The encoder's picture is made straight from the MXL grain: one pass over the v210 frame averages it to the preview size, 8-bit 4:2:0 (NV12 for NVENC, I420 for x264), and only that small picture enters GStreamer. Before, every full-size 10-bit frame was copied into GStreamer and converted and scaled there by `videoconvert` and `videoscale`. Interlaced sources use their first field, as `deinterlace method=bob` did.
+- v210 rows are padded to 128 bytes (48 pixels) as MXL writes them. Widths that are not a multiple of 48, such as 1280 (720p), were read with a 3424-byte instead of a 3456-byte stride.
 - NVENC uses `nvcudah264enc` (preset `p1`, tune `ultra-low-latency`, CBR, zero reorder delay) with NV12 input. The legacy `nvh264enc` presets fail on current NVIDIA drivers with "Selected preset not supported" (seen on driver 595.84), and every channel retried NVENC forever.
 - An encoder error after the pipeline is playing now switches that channel to x264 and increments `mxl_webrtc_monitor_encoder_fallbacks_total`, the same as a failure while building the pipeline.
 - The Compose files and `deploy/mxl-webrtc-monitor.yaml` start MediaMTX without `sh`. The MediaMTX image has no shell, so the sidecar never started.
