@@ -75,6 +75,115 @@ std::size_t previewBytes(int outWidth, int outHeight)
     return static_cast<std::size_t>(outWidth) * static_cast<std::size_t>(outHeight) * 3 / 2;
 }
 
+namespace
+{
+// v210ToPreview when both dimensions shrink (every preview of a real source):
+// each source row is unpacked once and added into per-pixel accumulators, and
+// each output pixel sums its accumulator range once per output row. Same integer
+// sums as the general version below, so the same bytes.
+void downscaleToPreview(std::uint8_t const* v210, int width, int rows, int step, std::size_t stride, int outWidth, int outHeight, bool nv12,
+    std::uint8_t* dst)
+{
+    int const chromaWidth = width / 2;
+    int const outChromaWidth = outWidth / 2;
+    std::vector<int> lumaFirst(static_cast<std::size_t>(outWidth) + 1);
+    std::vector<int> chromaFirst(static_cast<std::size_t>(outChromaWidth) + 1);
+    for (int x = 0; x <= outWidth; ++x)
+    {
+        lumaFirst[static_cast<std::size_t>(x)] = static_cast<int>(static_cast<long long>(x) * width / outWidth);
+    }
+    for (int x = 0; x <= outChromaWidth; ++x)
+    {
+        chromaFirst[static_cast<std::size_t>(x)] = static_cast<int>(static_cast<long long>(x) * chromaWidth / outChromaWidth);
+    }
+    int const groups = (width + 5) / 6;
+    // Accumulators cover whole groups; samples past the width are never summed.
+    std::vector<std::uint32_t> accY(static_cast<std::size_t>(groups) * 6);
+    std::vector<std::uint32_t> accCb(static_cast<std::size_t>(groups) * 3);
+    std::vector<std::uint32_t> accCr(static_cast<std::size_t>(groups) * 3);
+    std::uint8_t* planeY = dst;
+    std::uint8_t* planeU = dst + static_cast<std::size_t>(outWidth) * static_cast<std::size_t>(outHeight);
+    std::uint8_t* planeV = planeU + static_cast<std::size_t>(outChromaWidth) * static_cast<std::size_t>(outHeight / 2);
+    auto addRow = [&](int row) {
+        auto const* line = v210 + static_cast<std::size_t>(row) * stride;
+        std::uint32_t* ay = accY.data();
+        std::uint32_t* acb = accCb.data();
+        std::uint32_t* acr = accCr.data();
+        for (int g = 0; g < groups; ++g, line += 16, ay += 6, acb += 3, acr += 3)
+        {
+            std::uint32_t w[4];
+            std::memcpy(w, line, sizeof(w));
+            ay[0] += (w[0] >> 10) & 0x3ff;
+            ay[1] += w[1] & 0x3ff;
+            ay[2] += (w[1] >> 20) & 0x3ff;
+            ay[3] += (w[2] >> 10) & 0x3ff;
+            ay[4] += w[3] & 0x3ff;
+            ay[5] += (w[3] >> 20) & 0x3ff;
+            acb[0] += w[0] & 0x3ff;
+            acb[1] += (w[1] >> 10) & 0x3ff;
+            acb[2] += (w[2] >> 20) & 0x3ff;
+            acr[0] += (w[0] >> 20) & 0x3ff;
+            acr[1] += w[2] & 0x3ff;
+            acr[2] += (w[3] >> 10) & 0x3ff;
+        }
+    };
+    auto rangeSum = [](std::vector<std::uint32_t> const& acc, int first, int last) {
+        std::uint32_t sum = 0;
+        for (int i = first; i < last; ++i)
+        {
+            sum += acc[static_cast<std::size_t>(i)];
+        }
+        return sum;
+    };
+    for (int pair = 0; pair < outHeight / 2; ++pair)
+    {
+        std::fill(accCb.begin(), accCb.end(), 0);
+        std::fill(accCr.begin(), accCr.end(), 0);
+        std::uint32_t chromaRows = 0;
+        for (int half = 0; half < 2; ++half)
+        {
+            int const oy = pair * 2 + half;
+            int const first = static_cast<int>(static_cast<long long>(oy) * rows / outHeight);
+            int const last = std::max(first + 1, static_cast<int>(static_cast<long long>(oy + 1) * rows / outHeight));
+            std::fill(accY.begin(), accY.end(), 0);
+            for (int sy = first; sy < last && sy < rows; ++sy)
+            {
+                addRow(sy * step);
+                ++chromaRows;
+            }
+            std::uint32_t const lines = static_cast<std::uint32_t>(std::max(1, std::min(last, rows) - first));
+            for (int ox = 0; ox < outWidth; ++ox)
+            {
+                int const x0 = lumaFirst[static_cast<std::size_t>(ox)];
+                int const x1 = lumaFirst[static_cast<std::size_t>(ox) + 1];
+                std::uint32_t const count = static_cast<std::uint32_t>(x1 - x0) * lines * 4;
+                planeY[static_cast<std::size_t>(oy) * static_cast<std::size_t>(outWidth) + static_cast<std::size_t>(ox)] =
+                    static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (rangeSum(accY, x0, x1) + count / 2) / count));
+            }
+        }
+        chromaRows = std::max<std::uint32_t>(1, chromaRows);
+        for (int ox = 0; ox < outChromaWidth; ++ox)
+        {
+            int const x0 = chromaFirst[static_cast<std::size_t>(ox)];
+            int const x1 = chromaFirst[static_cast<std::size_t>(ox) + 1];
+            std::uint32_t const count = static_cast<std::uint32_t>(x1 - x0) * chromaRows * 4;
+            auto const u = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (rangeSum(accCb, x0, x1) + count / 2) / count));
+            auto const v = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (rangeSum(accCr, x0, x1) + count / 2) / count));
+            if (nv12)
+            {
+                planeU[static_cast<std::size_t>(pair) * static_cast<std::size_t>(outWidth) + static_cast<std::size_t>(ox) * 2] = u;
+                planeU[static_cast<std::size_t>(pair) * static_cast<std::size_t>(outWidth) + static_cast<std::size_t>(ox) * 2 + 1] = v;
+            }
+            else
+            {
+                planeU[static_cast<std::size_t>(pair) * static_cast<std::size_t>(outChromaWidth) + static_cast<std::size_t>(ox)] = u;
+                planeV[static_cast<std::size_t>(pair) * static_cast<std::size_t>(outChromaWidth) + static_cast<std::size_t>(ox)] = v;
+            }
+        }
+    }
+}
+} // namespace
+
 void v210ToPreview(std::uint8_t const* v210, int width, int height, bool interlaced, int outWidth, int outHeight, bool nv12, std::uint8_t* dst)
 {
     if (v210 == nullptr || dst == nullptr || width < 2 || height < 1 || outWidth < 2 || outHeight < 2 || (outWidth & 1) != 0 || (outHeight & 1) != 0)
@@ -85,6 +194,11 @@ void v210ToPreview(std::uint8_t const* v210, int width, int height, bool interla
     // Interlaced: the first field only (bob), so lines of the two fields never mix.
     int const rows = interlaced ? std::max(1, height / 2) : height;
     int const step = interlaced ? 2 : 1;
+    if (width >= outWidth && rows >= outHeight)
+    {
+        downscaleToPreview(v210, width, rows, step, stride, outWidth, outHeight, nv12, dst);
+        return;
+    }
     int const chromaWidth = width / 2;
     int const outChromaWidth = outWidth / 2;
     // Source column range of each output luma column and each output chroma column.
