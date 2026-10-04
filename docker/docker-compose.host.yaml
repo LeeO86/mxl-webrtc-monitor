@@ -14,7 +14,7 @@ services:
     restart: unless-stopped
 
   monitor:
-    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.0
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.1
     network_mode: host
     environment:
       MXL_DOMAIN_SCAN_PATH: /Volumes/mxl

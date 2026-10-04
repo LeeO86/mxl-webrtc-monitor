@@ -385,12 +385,12 @@ private:
         {
             ++previewW;
         }
-        launch += "queue max-size-buffers=2 leaky=downstream ! videoconvert ! ";
-        if (format.interlaced)
-        {
-            launch += "deinterlace method=bob ! ";
-        }
-        launch += "videoscale ! video/x-raw,format=I420,width=" + std::to_string(previewW) + ",height=" + std::to_string(previewH) + ",pixel-aspect-ratio=1/1 ! ";
+        // pushVideo hands over the encoder's picture (preview size, 8-bit 4:2:0) made
+        // straight from v210, so no full-size frame goes through GStreamer.
+        previewW_ = previewW;
+        previewH_ = previewH;
+        previewNv12_ = encoder == "nvenc";
+        launch += "queue max-size-buffers=2 leaky=downstream ! ";
         if (settings.max_fps > 0)
         {
             launch += "videorate drop-only=true ! video/x-raw,framerate=" + std::to_string(settings.max_fps) + "/1 ! ";
@@ -455,9 +455,9 @@ private:
             }
             gst_object_unref(encoderElement);
         }
-        std::string caps = "video/x-raw,format=v210,width=" + std::to_string(format.width) + ",height=" + std::to_string(format.height) +
-                           ",framerate=" + std::to_string(format.rateNum) + "/" + std::to_string(format.rateDen) +
-                           ",pixel-aspect-ratio=1/1,interlace-mode=" + (format.interlaced ? "interleaved" : "progressive");
+        std::string caps = std::string("video/x-raw,format=") + (previewNv12_ ? "NV12" : "I420") + ",width=" + std::to_string(previewW_) +
+                           ",height=" + std::to_string(previewH_) + ",framerate=" + std::to_string(format.rateNum) + "/" + std::to_string(format.rateDen) +
+                           ",pixel-aspect-ratio=1/1,interlace-mode=progressive";
         if (vsrc_ != nullptr)
         {
             GstCaps* videoCaps = gst_caps_from_string(caps.c_str());
@@ -475,11 +475,12 @@ private:
         gst_element_set_state(pipeline_, GST_STATE_READY);
         if (vsrc_ != nullptr)
         {
-            auto const bytes = v210FrameBytes(format.width, format.height);
-            std::vector<std::uint8_t> black(bytes);
-            fillV210Black(black.data(), format.width, format.height);
+            // Black in 8-bit 4:2:0: Y 16, chroma 128.
+            auto const bytes = previewBytes(previewW_, previewH_);
+            auto const luma = static_cast<std::size_t>(previewW_) * static_cast<std::size_t>(previewH_);
             GstBuffer* buffer = gst_buffer_new_allocate(nullptr, bytes, nullptr);
-            gst_buffer_fill(buffer, 0, black.data(), bytes);
+            gst_buffer_memset(buffer, 0, 16, luma);
+            gst_buffer_memset(buffer, luma, 128, bytes - luma);
             int const den = std::max(format.rateDen, 1);
             int const num = std::max(format.rateNum, 1);
             GST_BUFFER_PTS(buffer) = 0;
@@ -665,8 +666,19 @@ private:
         {
             droppedQueue_.fetch_add(1);
         }
-        GstBuffer* buffer = gst_buffer_new_allocate(nullptr, size, nullptr);
-        gst_buffer_fill(buffer, 0, data, size);
+        if (size < v210FrameBytes(format.width, format.height) || previewW_ < 2 || previewH_ < 2)
+        {
+            return false;
+        }
+        GstBuffer* buffer = gst_buffer_new_allocate(nullptr, previewBytes(previewW_, previewH_), nullptr);
+        GstMapInfo map{};
+        if (!gst_buffer_map(buffer, &map, GST_MAP_WRITE))
+        {
+            gst_buffer_unref(buffer);
+            return false;
+        }
+        v210ToPreview(data, format.width, format.height, format.interlaced, previewW_, previewH_, previewNv12_, map.data);
+        gst_buffer_unmap(buffer, &map);
         int const den = std::max(format.rateDen, 1);
         int const num = std::max(format.rateNum, 1);
         GST_BUFFER_PTS(buffer) = gst_util_uint64_scale(videoFrames_, GST_SECOND * static_cast<std::uint64_t>(den), static_cast<std::uint64_t>(num));
@@ -1102,6 +1114,10 @@ private:
     GstElement* pipeline_ = nullptr;
     GstElement* vsrc_ = nullptr;
     GstElement* asrc_ = nullptr;
+    // The picture appsrc carries: preview size, NV12 for NVENC, I420 for x264.
+    int previewW_ = 0;
+    int previewH_ = 0;
+    bool previewNv12_ = false;
     GstElement* overlay_ = nullptr;
     std::string pipeSig_;
     std::string pipeEncoder_;

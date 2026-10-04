@@ -165,3 +165,14 @@ Lab run 2026-10-03 on an NVIDIA A16 (not a target GPU; one GA107 of the board, d
 | x264 | 16 | x264 ×16 | 798 | 12.7 ms | 0 | 0 | 14.6 cores | – |
 
 Image 1.0.0 did not pass: `nvh264enc` failed with "Selected preset not supported" on every channel and retried forever, and the MediaMTX sidecar did not start from the Compose file. Both are fixed (see CHANGELOG). The fallback path was checked by building the legacy preset back in: each channel logged `encoder_fallback`, reported `x264` and `encoder_fallbacks_total` 1. The LL-HLS playlist was fetched with curl. Browser WebRTC from an operator desk and HLS with UDP blocked were not run.
+
+Lab run 2026-10-04, same host and method, 40 s measured: the preview made from v210 before GStreamer (1.0.1) against the image above.
+
+| Encoder | Channels | Image | Encoded fps (sum) | Mean encode latency | Drops | Process CPU | NVENC load |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| auto | 16 | before | 797 | 13.0 ms | 0 | 10.4 cores | 31 % |
+| auto | 16 | 1.0.1 | 799 | 3.0 ms | 0 | 6.4 cores | 30 % |
+| x264 | 8 | before | 401 | 12.5 ms | 0 | 6.2 cores | – |
+| x264 | 8 | 1.0.1 | 400 | 2.8 ms | 0 | 4.2 cores | – |
+
+Most of the remaining CPU is the conversion itself (`v210ToPreview`, one pass over each source frame).
