@@ -1,5 +1,6 @@
 #include "ops/mediamtx.hpp"
 
+#include "util/jsonutil.hpp"
 #include "util/net.hpp"
 
 #include <filesystem>
@@ -93,5 +94,27 @@ bool writeMediamtxConfig(Config const& cfg, std::string* error)
         }
         return false;
     }
+}
+
+std::string mediamtxVersionFromInfo(std::string const& body)
+{
+    std::string err;
+    auto const root = json::parse(body, &err);
+    if (!err.empty() || !root.is<picojson::object>())
+    {
+        return {};
+    }
+    auto const& object = root.get<picojson::object>();
+    auto const it = object.find("version");
+    if (it == object.end() || !it->second.is<std::string>())
+    {
+        return {};
+    }
+    auto version = it->second.get<std::string>();
+    if (!version.empty() && version.front() == 'v')
+    {
+        version.erase(0, 1);
+    }
+    return version;
 }
 } // namespace mwm

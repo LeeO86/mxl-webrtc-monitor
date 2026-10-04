@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.2
+
+- `GET /api/v1/info` reports the running MediaMTX in `mediamtx` (from its `GET /v3/info`, `unknown` when it does not answer) and the version of the examples in the new `mediamtx_pin`. It always said `1.20.1`, the pin, also next to another sidecar.
+
 ## 1.0.1
 
 - The encoder's picture is made straight from the MXL grain: one pass over the v210 frame averages it to the preview size, 8-bit 4:2:0 (NV12 for NVENC, I420 for x264), and only that small picture enters GStreamer. Before, every full-size 10-bit frame was copied into GStreamer and converted and scaled there by `videoconvert` and `videoscale`. Interlaced sources use their first field, as `deinterlace method=bob` did. Lab A16 host (README): 16 NVENC channels 10.4 → 6.4 cores, 8 x264 channels 6.2 → 4.2 cores, encode latency 13 → 3 ms.

@@ -12,6 +12,14 @@
 #include <fstream>
 #include <memory>
 
+TEST_CASE("mediamtx version comes from its info api")
+{
+    CHECK(mwm::mediamtxVersionFromInfo(R"({"version":"v1.21.1","started":"2026-10-04T08:08:39Z"})") == "1.21.1");
+    CHECK(mwm::mediamtxVersionFromInfo(R"({"version":"1.20.1"})") == "1.20.1");
+    CHECK(mwm::mediamtxVersionFromInfo(R"({"started":"x"})").empty());
+    CHECK(mwm::mediamtxVersionFromInfo("not json").empty());
+}
+
 TEST_CASE("announce addresses reject names and loopback")
 {
     CHECK_THROWS_AS(mwm::parseConfig({{"MONITOR_PUBLIC_IP", "127.0.0.1"}}), mwm::ConfigError);

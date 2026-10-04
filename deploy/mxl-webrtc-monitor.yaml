@@ -54,7 +54,7 @@ spec:
       # runtimeClassName: nvidia
       containers:
         - name: monitor
-          image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.1
+          image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.2
           envFrom:
             - configMapRef:
                 name: mxl-webrtc-monitor
