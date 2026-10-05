@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -443,7 +444,8 @@ private:
         }
         vsrc_ = gst_bin_get_by_name(GST_BIN(pipeline_), "vsrc");
         overlay_ = gst_bin_get_by_name(GST_BIN(pipeline_), "ovl");
-        asrc_ = withAudio ? gst_bin_get_by_name(GST_BIN(pipeline_), "asrc") : nullptr;
+        overlayText_.reset();
+        asrc_ =withAudio ? gst_bin_get_by_name(GST_BIN(pipeline_), "asrc") : nullptr;
         auto* encoderElement = gst_bin_get_by_name(GST_BIN(pipeline_), "enc");
         if (encoderElement != nullptr)
         {
@@ -605,7 +607,7 @@ private:
         {
             if (overlay_ != nullptr)
             {
-                g_object_set(overlay_, "text", "", nullptr);
+                applyOverlayText("");
             }
             return;
         }
@@ -650,7 +652,19 @@ private:
                 text += route.reason;
             }
         }
+        applyOverlayText(text);
+    }
+
+    // textoverlay lays out and renders its text again on every "text" set, and the video
+    // loop sets it once per grain: only a change is passed on.
+    void applyOverlayText(std::string const& text)
+    {
+        if (overlayText_ == text)
+        {
+            return;
+        }
         g_object_set(overlay_, "text", text.c_str(), nullptr);
+        overlayText_ = text;
     }
 
     bool pushVideo(std::uint8_t const* data, std::size_t size, VideoFormat const& format)
@@ -1119,6 +1133,7 @@ private:
     int previewH_ = 0;
     bool previewNv12_ = false;
     GstElement* overlay_ = nullptr;
+    std::optional<std::string> overlayText_; // the text overlay_ shows
     std::string pipeSig_;
     std::string pipeEncoder_;
     bool pipeAudio_ = false;

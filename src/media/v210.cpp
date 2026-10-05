@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
 
 namespace mwm
 {
@@ -77,6 +78,64 @@ std::size_t previewBytes(int outWidth, int outHeight)
 
 namespace
 {
+// Exact n / d for every 32-bit n by one multiply and a shift (Granlund and Montgomery,
+// m = ceil(2^(32+l) / d) with 2^l >= d). Every output pixel divides its sum, and the
+// div instruction was most of the preview's time.
+struct Divider
+{
+    std::uint64_t magic = 0;
+    int shift = 32;
+
+    explicit Divider(std::uint32_t d)
+    {
+        int l = 0;
+        while ((std::uint64_t{1} << l) < d)
+        {
+            ++l;
+        }
+        shift = 32 + l;
+        __extension__ using U128 = unsigned __int128;
+        magic = static_cast<std::uint64_t>(((U128{1} << shift) + d - 1) / d);
+    }
+
+    [[nodiscard]] std::uint32_t operator()(std::uint32_t n) const
+    {
+        __extension__ using U128 = unsigned __int128;
+        return static_cast<std::uint32_t>((U128{n} * magic) >> shift);
+    }
+};
+
+// The divider of each output column (its source columns × `lines` × 4) for each line count
+// that occurs; a ratio gives only a few, so each set is built once.
+class ColumnDividers
+{
+public:
+    explicit ColumnDividers(std::vector<int> const& first)
+        : first_(first)
+    {
+    }
+
+    std::vector<Divider> const& forLines(std::uint32_t lines)
+    {
+        auto it = sets_.find(lines);
+        if (it == sets_.end())
+        {
+            std::vector<Divider> set;
+            set.reserve(first_.size() - 1);
+            for (std::size_t ox = 0; ox + 1 < first_.size(); ++ox)
+            {
+                set.emplace_back(static_cast<std::uint32_t>(first_[ox + 1] - first_[ox]) * lines * 4);
+            }
+            it = sets_.emplace(lines, std::move(set)).first;
+        }
+        return it->second;
+    }
+
+private:
+    std::vector<int> const& first_;
+    std::map<std::uint32_t, std::vector<Divider>> sets_;
+};
+
 // Adds the three 10-bit fields of each 32-bit word of a v210 line into their own
 // accumulators (the first line of a range stores). Plain loops over words, so the
 // compiler vectorises them.
@@ -155,6 +214,8 @@ void downscaleToPreview(std::uint8_t const* v210, int width, int rows, int step,
     }
     std::vector<std::uint32_t> sumCb(static_cast<std::size_t>(outChromaWidth));
     std::vector<std::uint32_t> sumCr(static_cast<std::size_t>(outChromaWidth));
+    ColumnDividers lumaDividers(lumaFirst);
+    ColumnDividers chromaDividers(chromaFirst);
     std::uint8_t* planeY = dst;
     std::uint8_t* planeU = dst + static_cast<std::size_t>(outWidth) * static_cast<std::size_t>(outHeight);
     std::uint8_t* planeV = planeU + static_cast<std::size_t>(outChromaWidth) * static_cast<std::size_t>(outHeight / 2);
@@ -182,13 +243,14 @@ void downscaleToPreview(std::uint8_t const* v210, int width, int rows, int step,
                 ++chromaRows;
             }
             std::uint32_t const lines = static_cast<std::uint32_t>(std::max(1, std::min(last, rows) - first));
+            auto const& divide = lumaDividers.forLines(lines);
             for (int ox = 0; ox < outWidth; ++ox)
             {
                 int const x0 = lumaFirst[static_cast<std::size_t>(ox)];
                 int const x1 = lumaFirst[static_cast<std::size_t>(ox) + 1];
                 std::uint32_t const count = static_cast<std::uint32_t>(x1 - x0) * lines * 4;
                 planeY[static_cast<std::size_t>(oy) * static_cast<std::size_t>(outWidth) + static_cast<std::size_t>(ox)] =
-                    static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (rangeSum(lumaAt, x0, x1) + count / 2) / count));
+                    static_cast<std::uint8_t>(std::min<std::uint32_t>(255, divide[static_cast<std::size_t>(ox)](rangeSum(lumaAt, x0, x1) + count / 2)));
             }
             // The pair's chroma row averages the chroma of both output rows.
             for (int ox = 0; ox < outChromaWidth; ++ox)
@@ -200,13 +262,15 @@ void downscaleToPreview(std::uint8_t const* v210, int width, int rows, int step,
             }
         }
         chromaRows = std::max<std::uint32_t>(1, chromaRows);
+        auto const& divide = chromaDividers.forLines(chromaRows);
         for (int ox = 0; ox < outChromaWidth; ++ox)
         {
             int const x0 = chromaFirst[static_cast<std::size_t>(ox)];
             int const x1 = chromaFirst[static_cast<std::size_t>(ox) + 1];
             std::uint32_t const count = static_cast<std::uint32_t>(x1 - x0) * chromaRows * 4;
-            auto const u = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (sumCb[static_cast<std::size_t>(ox)] + count / 2) / count));
-            auto const v = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (sumCr[static_cast<std::size_t>(ox)] + count / 2) / count));
+            auto const& d = divide[static_cast<std::size_t>(ox)];
+            auto const u = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, d(sumCb[static_cast<std::size_t>(ox)] + count / 2)));
+            auto const v = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, d(sumCr[static_cast<std::size_t>(ox)] + count / 2)));
             if (nv12)
             {
                 planeU[static_cast<std::size_t>(pair) * static_cast<std::size_t>(outWidth) + static_cast<std::size_t>(ox) * 2] = u;
