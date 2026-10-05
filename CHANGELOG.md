@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.3
+
+Less CPU per channel; same pictures, settings and API. Lab A16 host (README), 1080p50 sources, 540p preview: 16 NVENC channels 6.4 → 4.1 cores, 8 x264 channels 4.2 → 3.2 cores, 16 x264 channels 8.9 → 6.3 cores, encode latency 3 → 1.5 ms.
+
+- The overlay text is passed to `textoverlay` only when it changes. The video loop set it on every grain, and `textoverlay` lays out and renders its text again on every set (Pango and Cairo were about 10 % of the process).
+- The preview conversion (`v210ToPreview`) sums whole source lines word by word, takes each output pixel's sum from prefix sums, and divides by a precomputed reciprocal instead of the `div` instruction. The output bytes are the same (unit test against the old code); a 1080p frame into 640×360 takes 2.0 instead of 3.6 ms on the lab CPU.
+
 ## 1.0.2
 
 - `GET /api/v1/info` reports the running MediaMTX in `mediamtx` (from its `GET /v3/info`, `unknown` when it does not answer) and the version of the examples in the new `mediamtx_pin`. It always said `1.20.1`, the pin, also next to another sidecar.

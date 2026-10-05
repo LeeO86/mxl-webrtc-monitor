@@ -11,7 +11,7 @@ services:
     command: ["python", "/fake_registry.py", "3210", "3211"]
 
   writer:
-    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.2
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.3
     network_mode: host
     user: "0:0"
     entrypoint: ["/usr/local/bin/mxl-flow-writer"]
@@ -38,7 +38,7 @@ services:
     restart: unless-stopped
 
   monitor:
-    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.2
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.3
     network_mode: host
     depends_on:
       - registry

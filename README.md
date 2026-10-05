@@ -175,4 +175,15 @@ Lab run 2026-10-04, same host and method, 40 s measured: the preview made from v
 | x264 | 8 | before | 401 | 12.5 ms | 0 | 6.2 cores | – |
 | x264 | 8 | 1.0.1 | 400 | 2.8 ms | 0 | 4.2 cores | – |
 
-Most of the remaining CPU is the conversion itself (`v210ToPreview`, one pass over each source frame).
+Lab run 2026-10-05, same host and method, 40 s measured: 1.0.3 (text overlay set only on change, faster preview conversion) against 1.0.2.
+
+| Encoder | Channels | Image | Encoded fps (sum) | Mean encode latency | Drops | Process CPU | NVENC load |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| auto | 16 | 1.0.2 | 801 | 3.1 ms | 0 | 6.4 cores | 31 % |
+| auto | 16 | 1.0.3 | 798 | 1.8 ms | 0 | 4.1 cores | 31 % |
+| x264 | 8 | 1.0.2 | 399 | 2.9 ms | 0 | 4.2 cores | – |
+| x264 | 8 | 1.0.3 | 401 | 1.4 ms | 0 | 3.2 cores | – |
+| x264 | 16 | 1.0.2 | 799 | 2.9 ms | 0 | 8.9 cores | – |
+| x264 | 16 | 1.0.3 | 799 | 1.4 ms | 0 | 6.3 cores | – |
+
+With x264, most of the remaining CPU is the encoder itself (ultrafast preset); `v210ToPreview` is about a third.
