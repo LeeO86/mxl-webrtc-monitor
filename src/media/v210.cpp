@@ -77,10 +77,38 @@ std::size_t previewBytes(int outWidth, int outHeight)
 
 namespace
 {
+// Adds the three 10-bit fields of each 32-bit word of a v210 line into their own
+// accumulators (the first line of a range stores). Plain loops over words, so the
+// compiler vectorises them.
+void accumulateLine(std::uint8_t const* __restrict line, std::size_t words, bool store, std::uint32_t* __restrict lo, std::uint32_t* __restrict mid,
+    std::uint32_t* __restrict hi)
+{
+    if (store)
+    {
+        for (std::size_t i = 0; i < words; ++i)
+        {
+            std::uint32_t w = 0;
+            std::memcpy(&w, line + i * 4, sizeof(w));
+            lo[i] = w & 0x3ff;
+            mid[i] = (w >> 10) & 0x3ff;
+            hi[i] = (w >> 20) & 0x3ff;
+        }
+        return;
+    }
+    for (std::size_t i = 0; i < words; ++i)
+    {
+        std::uint32_t w = 0;
+        std::memcpy(&w, line + i * 4, sizeof(w));
+        lo[i] += w & 0x3ff;
+        mid[i] += (w >> 10) & 0x3ff;
+        hi[i] += (w >> 20) & 0x3ff;
+    }
+}
+
 // v210ToPreview when both dimensions shrink (every preview of a real source):
-// each source row is unpacked once and added into per-pixel accumulators, and
-// each output pixel sums its accumulator range once per output row. Same integer
-// sums as the general version below, so the same bytes.
+// the source lines of an output row are summed word by word, and each output pixel
+// sums the accumulators of its source samples. Same integer sums as the general
+// version below, so the same bytes.
 void downscaleToPreview(std::uint8_t const* v210, int width, int rows, int step, std::size_t stride, int outWidth, int outHeight, bool nv12,
     std::uint8_t* dst)
 {
@@ -96,59 +124,61 @@ void downscaleToPreview(std::uint8_t const* v210, int width, int rows, int step,
     {
         chromaFirst[static_cast<std::size_t>(x)] = static_cast<int>(static_cast<long long>(x) * chromaWidth / outChromaWidth);
     }
-    int const groups = (width + 5) / 6;
-    // Accumulators cover whole groups; samples past the width are never summed.
-    std::vector<std::uint32_t> accY(static_cast<std::size_t>(groups) * 6);
-    std::vector<std::uint32_t> accCb(static_cast<std::size_t>(groups) * 3);
-    std::vector<std::uint32_t> accCr(static_cast<std::size_t>(groups) * 3);
+    // Accumulators cover whole groups (4 words, 6 pixels); samples past the width are never summed.
+    std::size_t const words = static_cast<std::size_t>((width + 5) / 6) * 4;
+    std::vector<std::uint32_t> acc(words * 3);
+    std::uint32_t* lo = acc.data();
+    std::uint32_t* mid = lo + words;
+    std::uint32_t* hi = mid + words;
+    // Accumulator of each sample: field (lo, mid, hi) and word within its group.
+    // Words are Cb0 Y0 Cr0 | Y1 Cb1 Y2 | Cr1 Y3 Cb2 | Y4 Cr2 Y5.
+    static constexpr int kLumaField[6] = {1, 0, 2, 1, 0, 2};
+    static constexpr int kLumaWord[6] = {0, 1, 1, 2, 3, 3};
+    static constexpr int kCbField[3] = {0, 1, 2};
+    static constexpr int kCbWord[3] = {0, 1, 2};
+    static constexpr int kCrField[3] = {2, 0, 1};
+    static constexpr int kCrWord[3] = {0, 2, 3};
+    std::vector<std::uint32_t> lumaAt(static_cast<std::size_t>(width));
+    std::vector<std::uint32_t> cbAt(static_cast<std::size_t>(chromaWidth));
+    std::vector<std::uint32_t> crAt(static_cast<std::size_t>(chromaWidth));
+    for (int x = 0; x < width; ++x)
+    {
+        lumaAt[static_cast<std::size_t>(x)] =
+            static_cast<std::uint32_t>(static_cast<std::size_t>(kLumaField[x % 6]) * words + static_cast<std::size_t>(x / 6) * 4 + kLumaWord[x % 6]);
+    }
+    for (int c = 0; c < chromaWidth; ++c)
+    {
+        cbAt[static_cast<std::size_t>(c)] =
+            static_cast<std::uint32_t>(static_cast<std::size_t>(kCbField[c % 3]) * words + static_cast<std::size_t>(c / 3) * 4 + kCbWord[c % 3]);
+        crAt[static_cast<std::size_t>(c)] =
+            static_cast<std::uint32_t>(static_cast<std::size_t>(kCrField[c % 3]) * words + static_cast<std::size_t>(c / 3) * 4 + kCrWord[c % 3]);
+    }
+    std::vector<std::uint32_t> sumCb(static_cast<std::size_t>(outChromaWidth));
+    std::vector<std::uint32_t> sumCr(static_cast<std::size_t>(outChromaWidth));
     std::uint8_t* planeY = dst;
     std::uint8_t* planeU = dst + static_cast<std::size_t>(outWidth) * static_cast<std::size_t>(outHeight);
     std::uint8_t* planeV = planeU + static_cast<std::size_t>(outChromaWidth) * static_cast<std::size_t>(outHeight / 2);
-    auto addRow = [&](int row) {
-        auto const* line = v210 + static_cast<std::size_t>(row) * stride;
-        std::uint32_t* ay = accY.data();
-        std::uint32_t* acb = accCb.data();
-        std::uint32_t* acr = accCr.data();
-        for (int g = 0; g < groups; ++g, line += 16, ay += 6, acb += 3, acr += 3)
-        {
-            std::uint32_t w[4];
-            std::memcpy(w, line, sizeof(w));
-            ay[0] += (w[0] >> 10) & 0x3ff;
-            ay[1] += w[1] & 0x3ff;
-            ay[2] += (w[1] >> 20) & 0x3ff;
-            ay[3] += (w[2] >> 10) & 0x3ff;
-            ay[4] += w[3] & 0x3ff;
-            ay[5] += (w[3] >> 20) & 0x3ff;
-            acb[0] += w[0] & 0x3ff;
-            acb[1] += (w[1] >> 10) & 0x3ff;
-            acb[2] += (w[2] >> 20) & 0x3ff;
-            acr[0] += (w[0] >> 20) & 0x3ff;
-            acr[1] += w[2] & 0x3ff;
-            acr[2] += (w[3] >> 10) & 0x3ff;
-        }
-    };
-    auto rangeSum = [](std::vector<std::uint32_t> const& acc, int first, int last) {
+    auto rangeSum = [&acc](std::vector<std::uint32_t> const& at, int first, int last) {
         std::uint32_t sum = 0;
         for (int i = first; i < last; ++i)
         {
-            sum += acc[static_cast<std::size_t>(i)];
+            sum += acc[at[static_cast<std::size_t>(i)]];
         }
         return sum;
     };
     for (int pair = 0; pair < outHeight / 2; ++pair)
     {
-        std::fill(accCb.begin(), accCb.end(), 0);
-        std::fill(accCr.begin(), accCr.end(), 0);
+        std::fill(sumCb.begin(), sumCb.end(), 0);
+        std::fill(sumCr.begin(), sumCr.end(), 0);
         std::uint32_t chromaRows = 0;
         for (int half = 0; half < 2; ++half)
         {
             int const oy = pair * 2 + half;
             int const first = static_cast<int>(static_cast<long long>(oy) * rows / outHeight);
             int const last = std::max(first + 1, static_cast<int>(static_cast<long long>(oy + 1) * rows / outHeight));
-            std::fill(accY.begin(), accY.end(), 0);
             for (int sy = first; sy < last && sy < rows; ++sy)
             {
-                addRow(sy * step);
+                accumulateLine(v210 + static_cast<std::size_t>(sy) * static_cast<std::size_t>(step) * stride, words, sy == first, lo, mid, hi);
                 ++chromaRows;
             }
             std::uint32_t const lines = static_cast<std::uint32_t>(std::max(1, std::min(last, rows) - first));
@@ -158,7 +188,15 @@ void downscaleToPreview(std::uint8_t const* v210, int width, int rows, int step,
                 int const x1 = lumaFirst[static_cast<std::size_t>(ox) + 1];
                 std::uint32_t const count = static_cast<std::uint32_t>(x1 - x0) * lines * 4;
                 planeY[static_cast<std::size_t>(oy) * static_cast<std::size_t>(outWidth) + static_cast<std::size_t>(ox)] =
-                    static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (rangeSum(accY, x0, x1) + count / 2) / count));
+                    static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (rangeSum(lumaAt, x0, x1) + count / 2) / count));
+            }
+            // The pair's chroma row averages the chroma of both output rows.
+            for (int ox = 0; ox < outChromaWidth; ++ox)
+            {
+                int const x0 = chromaFirst[static_cast<std::size_t>(ox)];
+                int const x1 = chromaFirst[static_cast<std::size_t>(ox) + 1];
+                sumCb[static_cast<std::size_t>(ox)] += rangeSum(cbAt, x0, x1);
+                sumCr[static_cast<std::size_t>(ox)] += rangeSum(crAt, x0, x1);
             }
         }
         chromaRows = std::max<std::uint32_t>(1, chromaRows);
@@ -167,8 +205,8 @@ void downscaleToPreview(std::uint8_t const* v210, int width, int rows, int step,
             int const x0 = chromaFirst[static_cast<std::size_t>(ox)];
             int const x1 = chromaFirst[static_cast<std::size_t>(ox) + 1];
             std::uint32_t const count = static_cast<std::uint32_t>(x1 - x0) * chromaRows * 4;
-            auto const u = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (rangeSum(accCb, x0, x1) + count / 2) / count));
-            auto const v = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (rangeSum(accCr, x0, x1) + count / 2) / count));
+            auto const u = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (sumCb[static_cast<std::size_t>(ox)] + count / 2) / count));
+            auto const v = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (sumCr[static_cast<std::size_t>(ox)] + count / 2) / count));
             if (nv12)
             {
                 planeU[static_cast<std::size_t>(pair) * static_cast<std::size_t>(outWidth) + static_cast<std::size_t>(ox) * 2] = u;
