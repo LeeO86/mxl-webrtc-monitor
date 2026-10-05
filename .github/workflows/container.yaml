@@ -30,7 +30,11 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=raw,value=nightly-dev,enable=${{ github.ref == 'refs/heads/main' }}
-            type=sha,prefix=git-
+            type=sha,prefix=git-,enable=${{ github.ref == 'refs/heads/main' }}
+          # Platform guideline G11: no latest, and git-<sha7> only from the push to main,
+          # so a tag build of the same commit does not move it.
+          flavor: |
+            latest=false
           labels: |
             io.dmf.mxl.revision=218ddaa0a08c12ffe75fc475ae65aa3d9eef16d7
       - uses: docker/build-push-action@v6
