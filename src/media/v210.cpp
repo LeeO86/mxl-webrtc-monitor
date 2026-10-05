@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
 
 namespace mwm
 {
@@ -77,10 +78,157 @@ std::size_t previewBytes(int outWidth, int outHeight)
 
 namespace
 {
-// v210ToPreview when both dimensions shrink (every preview of a real source):
-// each source row is unpacked once and added into per-pixel accumulators, and
-// each output pixel sums its accumulator range once per output row. Same integer
-// sums as the general version below, so the same bytes.
+// Largest count a Divider takes.
+constexpr long long kMaxDivisor = 1LL << 22;
+
+// (sum + count/2) / count by one multiply and a shift (Granlund and Montgomery): with
+// 2^l >= count and m = ceil(2^(2l+9) / count) it is exact for every n < 2^(l+9), and n is
+// at most 256.25·count (samples are at most 1023, count is four times their number).
+// n·m stays below 2^64 for counts up to kMaxDivisor. Every output pixel divides, and the
+// div instruction was most of the preview's time.
+struct Divider
+{
+    std::uint64_t magic = 1;
+    std::uint32_t shift = 0;
+    std::uint32_t half = 0;
+
+    explicit Divider(std::uint32_t d)
+        : half(d / 2)
+    {
+        std::uint32_t l = 0;
+        while ((std::uint64_t{1} << l) < d)
+        {
+            ++l;
+        }
+        shift = 2 * l + 9;
+        magic = ((std::uint64_t{1} << shift) + d - 1) / d;
+    }
+
+    [[nodiscard]] std::uint32_t rounded(std::uint32_t sum) const
+    {
+        return static_cast<std::uint32_t>((std::uint64_t{sum + half} * magic) >> shift);
+    }
+};
+
+// The divider of each output column (its source columns × `lines` × 4) for each line count
+// that occurs; a ratio gives only a few, so each set is built once.
+class ColumnDividers
+{
+public:
+    explicit ColumnDividers(std::vector<int> const& first)
+        : first_(first)
+    {
+    }
+
+    std::vector<Divider> const& forLines(std::uint32_t lines)
+    {
+        auto it = sets_.find(lines);
+        if (it == sets_.end())
+        {
+            std::vector<Divider> set;
+            set.reserve(first_.size() - 1);
+            for (std::size_t ox = 0; ox + 1 < first_.size(); ++ox)
+            {
+                set.emplace_back(static_cast<std::uint32_t>(first_[ox + 1] - first_[ox]) * lines * 4);
+            }
+            it = sets_.emplace(lines, std::move(set)).first;
+        }
+        return it->second;
+    }
+
+private:
+    std::vector<int> const& first_;
+    std::map<std::uint32_t, std::vector<Divider>> sets_;
+};
+
+// Adds the three 10-bit fields of each 32-bit word of a v210 line into their own
+// accumulators (the first line of a range stores). Plain loops over words, so the
+// compiler vectorises them.
+void accumulateLine(std::uint8_t const* __restrict line, std::size_t words, bool store, std::uint32_t* __restrict lo, std::uint32_t* __restrict mid,
+    std::uint32_t* __restrict hi)
+{
+    if (store)
+    {
+        for (std::size_t i = 0; i < words; ++i)
+        {
+            std::uint32_t w = 0;
+            std::memcpy(&w, line + i * 4, sizeof(w));
+            lo[i] = w & 0x3ff;
+            mid[i] = (w >> 10) & 0x3ff;
+            hi[i] = (w >> 20) & 0x3ff;
+        }
+        return;
+    }
+    for (std::size_t i = 0; i < words; ++i)
+    {
+        std::uint32_t w = 0;
+        std::memcpy(&w, line + i * 4, sizeof(w));
+        lo[i] += w & 0x3ff;
+        mid[i] += (w >> 10) & 0x3ff;
+        hi[i] += (w >> 20) & 0x3ff;
+    }
+}
+
+// Words of a group are Cb0 Y0 Cr0 | Y1 Cb1 Y2 | Cr1 Y3 Cb2 | Y4 Cr2 Y5: the field
+// (lo, mid, hi) and the word of each sample.
+constexpr int kLumaField[6] = {1, 0, 2, 1, 0, 2};
+constexpr int kLumaWord[6] = {0, 1, 1, 2, 3, 3};
+constexpr int kCbField[3] = {0, 1, 2};
+constexpr int kCbWord[3] = {0, 1, 2};
+constexpr int kCrField[3] = {2, 0, 1};
+constexpr int kCrWord[3] = {0, 2, 3};
+
+// Prefix sums of the accumulated samples in pixel order: py[x] is the sum of luma 0…x-1,
+// the same for Cb and Cr, so a column range is one subtraction. Unsigned wrap-around keeps
+// every difference exact.
+void prefixSums(std::uint32_t const* lo, std::uint32_t const* mid, std::uint32_t const* hi, int width, std::uint32_t* py, std::uint32_t* pcb,
+    std::uint32_t* pcr)
+{
+    std::uint32_t y = 0;
+    std::uint32_t cb = 0;
+    std::uint32_t cr = 0;
+    py[0] = 0;
+    pcb[0] = 0;
+    pcr[0] = 0;
+    int const full = width / 6; // groups whose 6 luma and 3 chroma samples are all inside the width
+    for (int g = 0; g < full; ++g)
+    {
+        std::size_t const w = static_cast<std::size_t>(g) * 4;
+        std::uint32_t* oy = py + static_cast<std::size_t>(g) * 6 + 1;
+        std::uint32_t* ocb = pcb + static_cast<std::size_t>(g) * 3 + 1;
+        std::uint32_t* ocr = pcr + static_cast<std::size_t>(g) * 3 + 1;
+        oy[0] = y += mid[w];
+        oy[1] = y += lo[w + 1];
+        oy[2] = y += hi[w + 1];
+        oy[3] = y += mid[w + 2];
+        oy[4] = y += lo[w + 3];
+        oy[5] = y += hi[w + 3];
+        ocb[0] = cb += lo[w];
+        ocb[1] = cb += mid[w + 1];
+        ocb[2] = cb += hi[w + 2];
+        ocr[0] = cr += hi[w];
+        ocr[1] = cr += lo[w + 2];
+        ocr[2] = cr += mid[w + 3];
+    }
+    std::uint32_t const* fields[3] = {lo, mid, hi};
+    for (int x = full * 6; x < width; ++x)
+    {
+        y += fields[kLumaField[x % 6]][static_cast<std::size_t>(x / 6) * 4 + kLumaWord[x % 6]];
+        py[x + 1] = y;
+    }
+    for (int c = full * 3; c < width / 2; ++c)
+    {
+        cb += fields[kCbField[c % 3]][static_cast<std::size_t>(c / 3) * 4 + kCbWord[c % 3]];
+        cr += fields[kCrField[c % 3]][static_cast<std::size_t>(c / 3) * 4 + kCrWord[c % 3]];
+        pcb[c + 1] = cb;
+        pcr[c + 1] = cr;
+    }
+}
+
+// v210ToPreview when both dimensions shrink (every preview of a real source): the source
+// lines of an output row are summed word by word, turned into prefix sums in pixel order,
+// and each output pixel takes the difference over its columns. Same integer sums as the
+// general version below, so the same bytes.
 void downscaleToPreview(std::uint8_t const* v210, int width, int rows, int step, std::size_t stride, int outWidth, int outHeight, bool nv12,
     std::uint8_t* dst)
 {
@@ -96,79 +244,62 @@ void downscaleToPreview(std::uint8_t const* v210, int width, int rows, int step,
     {
         chromaFirst[static_cast<std::size_t>(x)] = static_cast<int>(static_cast<long long>(x) * chromaWidth / outChromaWidth);
     }
-    int const groups = (width + 5) / 6;
-    // Accumulators cover whole groups; samples past the width are never summed.
-    std::vector<std::uint32_t> accY(static_cast<std::size_t>(groups) * 6);
-    std::vector<std::uint32_t> accCb(static_cast<std::size_t>(groups) * 3);
-    std::vector<std::uint32_t> accCr(static_cast<std::size_t>(groups) * 3);
+    // Accumulators cover whole groups (4 words, 6 pixels); samples past the width are never summed.
+    std::size_t const words = static_cast<std::size_t>((width + 5) / 6) * 4;
+    std::vector<std::uint32_t> acc(words * 3);
+    std::uint32_t* lo = acc.data();
+    std::uint32_t* mid = lo + words;
+    std::uint32_t* hi = mid + words;
+    std::vector<std::uint32_t> py(static_cast<std::size_t>(width) + 1);
+    std::vector<std::uint32_t> pcb(static_cast<std::size_t>(chromaWidth) + 1);
+    std::vector<std::uint32_t> pcr(static_cast<std::size_t>(chromaWidth) + 1);
+    std::vector<std::uint32_t> sumCb(static_cast<std::size_t>(outChromaWidth));
+    std::vector<std::uint32_t> sumCr(static_cast<std::size_t>(outChromaWidth));
+    ColumnDividers lumaDividers(lumaFirst);
+    ColumnDividers chromaDividers(chromaFirst);
     std::uint8_t* planeY = dst;
     std::uint8_t* planeU = dst + static_cast<std::size_t>(outWidth) * static_cast<std::size_t>(outHeight);
     std::uint8_t* planeV = planeU + static_cast<std::size_t>(outChromaWidth) * static_cast<std::size_t>(outHeight / 2);
-    auto addRow = [&](int row) {
-        auto const* line = v210 + static_cast<std::size_t>(row) * stride;
-        std::uint32_t* ay = accY.data();
-        std::uint32_t* acb = accCb.data();
-        std::uint32_t* acr = accCr.data();
-        for (int g = 0; g < groups; ++g, line += 16, ay += 6, acb += 3, acr += 3)
-        {
-            std::uint32_t w[4];
-            std::memcpy(w, line, sizeof(w));
-            ay[0] += (w[0] >> 10) & 0x3ff;
-            ay[1] += w[1] & 0x3ff;
-            ay[2] += (w[1] >> 20) & 0x3ff;
-            ay[3] += (w[2] >> 10) & 0x3ff;
-            ay[4] += w[3] & 0x3ff;
-            ay[5] += (w[3] >> 20) & 0x3ff;
-            acb[0] += w[0] & 0x3ff;
-            acb[1] += (w[1] >> 10) & 0x3ff;
-            acb[2] += (w[2] >> 20) & 0x3ff;
-            acr[0] += (w[0] >> 20) & 0x3ff;
-            acr[1] += w[2] & 0x3ff;
-            acr[2] += (w[3] >> 10) & 0x3ff;
-        }
-    };
-    auto rangeSum = [](std::vector<std::uint32_t> const& acc, int first, int last) {
-        std::uint32_t sum = 0;
-        for (int i = first; i < last; ++i)
-        {
-            sum += acc[static_cast<std::size_t>(i)];
-        }
-        return sum;
-    };
     for (int pair = 0; pair < outHeight / 2; ++pair)
     {
-        std::fill(accCb.begin(), accCb.end(), 0);
-        std::fill(accCr.begin(), accCr.end(), 0);
+        std::fill(sumCb.begin(), sumCb.end(), 0);
+        std::fill(sumCr.begin(), sumCr.end(), 0);
         std::uint32_t chromaRows = 0;
         for (int half = 0; half < 2; ++half)
         {
             int const oy = pair * 2 + half;
             int const first = static_cast<int>(static_cast<long long>(oy) * rows / outHeight);
             int const last = std::max(first + 1, static_cast<int>(static_cast<long long>(oy + 1) * rows / outHeight));
-            std::fill(accY.begin(), accY.end(), 0);
             for (int sy = first; sy < last && sy < rows; ++sy)
             {
-                addRow(sy * step);
+                accumulateLine(v210 + static_cast<std::size_t>(sy) * static_cast<std::size_t>(step) * stride, words, sy == first, lo, mid, hi);
                 ++chromaRows;
             }
+            prefixSums(lo, mid, hi, width, py.data(), pcb.data(), pcr.data());
             std::uint32_t const lines = static_cast<std::uint32_t>(std::max(1, std::min(last, rows) - first));
+            auto const& divide = lumaDividers.forLines(lines);
+            std::uint8_t* outY = planeY + static_cast<std::size_t>(oy) * static_cast<std::size_t>(outWidth);
             for (int ox = 0; ox < outWidth; ++ox)
             {
-                int const x0 = lumaFirst[static_cast<std::size_t>(ox)];
-                int const x1 = lumaFirst[static_cast<std::size_t>(ox) + 1];
-                std::uint32_t const count = static_cast<std::uint32_t>(x1 - x0) * lines * 4;
-                planeY[static_cast<std::size_t>(oy) * static_cast<std::size_t>(outWidth) + static_cast<std::size_t>(ox)] =
-                    static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (rangeSum(accY, x0, x1) + count / 2) / count));
+                std::uint32_t const sum = py[static_cast<std::size_t>(lumaFirst[static_cast<std::size_t>(ox) + 1])] - py[static_cast<std::size_t>(lumaFirst[static_cast<std::size_t>(ox)])];
+                outY[ox] = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, divide[static_cast<std::size_t>(ox)].rounded(sum)));
+            }
+            // The pair's chroma row averages the chroma of both output rows.
+            for (int ox = 0; ox < outChromaWidth; ++ox)
+            {
+                auto const x0 = static_cast<std::size_t>(chromaFirst[static_cast<std::size_t>(ox)]);
+                auto const x1 = static_cast<std::size_t>(chromaFirst[static_cast<std::size_t>(ox) + 1]);
+                sumCb[static_cast<std::size_t>(ox)] += pcb[x1] - pcb[x0];
+                sumCr[static_cast<std::size_t>(ox)] += pcr[x1] - pcr[x0];
             }
         }
         chromaRows = std::max<std::uint32_t>(1, chromaRows);
+        auto const& divide = chromaDividers.forLines(chromaRows);
         for (int ox = 0; ox < outChromaWidth; ++ox)
         {
-            int const x0 = chromaFirst[static_cast<std::size_t>(ox)];
-            int const x1 = chromaFirst[static_cast<std::size_t>(ox) + 1];
-            std::uint32_t const count = static_cast<std::uint32_t>(x1 - x0) * chromaRows * 4;
-            auto const u = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (rangeSum(accCb, x0, x1) + count / 2) / count));
-            auto const v = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, (rangeSum(accCr, x0, x1) + count / 2) / count));
+            auto const& d = divide[static_cast<std::size_t>(ox)];
+            auto const u = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, d.rounded(sumCb[static_cast<std::size_t>(ox)])));
+            auto const v = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, d.rounded(sumCr[static_cast<std::size_t>(ox)])));
             if (nv12)
             {
                 planeU[static_cast<std::size_t>(pair) * static_cast<std::size_t>(outWidth) + static_cast<std::size_t>(ox) * 2] = u;
@@ -194,7 +325,11 @@ void v210ToPreview(std::uint8_t const* v210, int width, int height, bool interla
     // Interlaced: the first field only (bob), so lines of the two fields never mix.
     int const rows = interlaced ? std::max(1, height / 2) : height;
     int const step = interlaced ? 2 : 1;
-    if (width >= outWidth && rows >= outHeight)
+    // Counts above kMaxDivisor (cols × lines × 4; a whole 4K frame into a few pixels) take
+    // the general path.
+    auto const ceilDiv = [](long long a, long long b) { return (a + b - 1) / b; };
+    long long const maxCount = std::max(ceilDiv(width, outWidth), ceilDiv(width / 2, outWidth / 2)) * 2 * ceilDiv(rows, outHeight) * 4;
+    if (width >= outWidth && rows >= outHeight && maxCount <= kMaxDivisor)
     {
         downscaleToPreview(v210, width, rows, step, stride, outWidth, outHeight, nv12, dst);
         return;

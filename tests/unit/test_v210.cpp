@@ -158,8 +158,11 @@ TEST_CASE("the downscale path gives the same bytes as the reference")
         bool interlaced;
         int ow, oh;
     };
+    // 1920x1080 into 2x2 is the largest divisor of the downscale path (2^22 - 47104); 3840x2160
+    // into 4x2 takes the general path.
     for (Case c : {Case{1920, 1080, false, 640, 360}, Case{1920, 1080, true, 640, 360}, Case{1280, 720, false, 640, 360},
-             Case{3840, 2160, false, 640, 360}, Case{1920, 1080, false, 426, 240}})
+             Case{3840, 2160, false, 640, 360}, Case{1920, 1080, false, 426, 240}, Case{720, 576, true, 640, 288}, Case{1920, 1080, false, 2, 2},
+             Case{3840, 2160, false, 4, 2}})
     {
         std::vector<std::uint8_t> frame(mwm::v210FrameBytes(c.w, c.h));
         for (auto& b : frame)
