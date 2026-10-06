@@ -1016,6 +1016,7 @@ private:
                     continue;
                 }
                 audioFlow_ = route.flow_id;
+                audioHeadSeen_ = MXL_UNDEFINED_INDEX;
                 auto const parsed = parseAudioDef(readFlowDef(audioInstance_, route.flow_id));
                 audioChannels_ = parsed.channels;
                 attempt = 0;
@@ -1029,9 +1030,18 @@ private:
             {
                 audioChannels_ = channels;
             }
-            auto const nowTai = mxlGetTime();
-            bool const fresh = runtime.headIndex != MXL_UNDEFINED_INDEX && runtime.headIndex > 480 && runtime.lastWriteTime != 0 && nowTai >= runtime.lastWriteTime &&
-                               (nowTai - runtime.lastWriteTime) < 100000000ULL;
+            // MXL's continuous writer does not set lastWriteTime (only the discrete one does), so an
+            // audio flow is live while its head moves.
+            auto const steadyNow = std::chrono::steady_clock::now();
+            if (runtime.headIndex != audioHeadSeen_)
+            {
+                if (audioHeadSeen_ != MXL_UNDEFINED_INDEX)
+                {
+                    audioHeadAt_ = steadyNow;
+                }
+                audioHeadSeen_ = runtime.headIndex;
+            }
+            bool const fresh = runtime.headIndex != MXL_UNDEFINED_INDEX && runtime.headIndex > 480 && steadyNow - audioHeadAt_ < std::chrono::milliseconds(100);
             if (!fresh)
             {
                 book_.setProbe(index_, LegKind::Audio, true, true, false, "");
@@ -1123,6 +1133,8 @@ private:
     mxlFlowReader audioReader_ = nullptr;
     std::string audioPath_;
     std::string audioFlow_;
+    std::uint64_t audioHeadSeen_ = MXL_UNDEFINED_INDEX;           // audio head at the last pass
+    std::chrono::steady_clock::time_point audioHeadAt_{};         // when it last moved
     int audioChannels_ = 0;
     std::mutex pipeMu_;
     GstElement* pipeline_ = nullptr;

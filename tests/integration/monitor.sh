@@ -129,17 +129,17 @@ patch "$VIDEO_RX" "$DOMAIN_ID" "$VIDEO_ID"
 patch "$AUDIO_RX" "$DOMAIN_ID" "$AUDIO_ID"
 
 wait_state() {
-  local want="$1"
+  local want="$1" kind="${2:-video}"
   for _ in $(seq 1 80); do
     local state
-    state="$(curl -sf "http://127.0.0.1:${WEB_PORT}/api/v1/channels" | python3 -c 'import json,sys; print(json.load(sys.stdin)["channels"][0]["video"]["state"])')"
+    state="$(curl -sf "http://127.0.0.1:${WEB_PORT}/api/v1/channels" | python3 -c 'import json,sys; print(json.load(sys.stdin)["channels"][0][sys.argv[1]]["state"])' "$kind")"
     if [[ "$state" == "$want" ]]; then
-      echo "state=$state"
+      echo "$kind state=$state"
       return 0
     fi
     sleep 0.25
   done
-  echo "wanted $want, channels:" >&2
+  echo "wanted $kind $want, channels:" >&2
   curl -sf "http://127.0.0.1:${WEB_PORT}/api/v1/channels" >&2 || true
   echo >&2
   tail -n 80 "$WORKDIR/monitor.log" >&2 || true
@@ -147,6 +147,8 @@ wait_state() {
 }
 
 wait_state running
+# Audio too (MXL's continuous writer leaves lastWriteTime at 0; 1.0.3 showed no_signal).
+wait_state running audio
 
 channels_json="$(curl -sf "http://127.0.0.1:${WEB_PORT}/api/v1/channels")"
 HLS_INDEX="$(python3 -c '
@@ -199,6 +201,7 @@ kill "${PIDS[1]}" 2>/dev/null || true
 wait "${PIDS[1]}" 2>/dev/null || true
 unset 'PIDS[1]'
 wait_state no_signal
+wait_state no_signal audio
 
 patch "$VIDEO_RX" "$DOMAIN_ID" "$VIDEO2_ID"
 wait_state waiting

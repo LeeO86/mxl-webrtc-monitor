@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.4
+
+- Audio is read. MXL's continuous flow writer never sets `lastWriteTime` (only the discrete writer does), and the audio leg took a flow as live only when `lastWriteTime` was less than 100 ms old, so every audio input stayed `no_signal` with `audio_channels` 0 and no meters, whatever wrote it (seen on the platform with mxl-multiviewer, mxl-replay and mxl-test-player audio, local and mirrored). An audio flow is now live while its head index moves (within 100 ms). The integration test checks the audio state as well.
+
 ## 1.0.3
 
 Less CPU per channel; same pictures, settings and API. Lab A16 host (README), 1080p50 sources, 540p preview: 16 NVENC channels 6.4 → 4.1 cores, 8 x264 channels 4.2 → 3.2 cores, 16 x264 channels 8.9 → 6.3 cores, encode latency 3 → 1.5 ms.
