@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import Hls from "hls.js";
 
 const tab = ref("multiview");
@@ -13,7 +13,11 @@ const message = ref("");
 const messageOk = ref(true);
 const configText = ref("");
 const envText = ref("");
+const drafts = ref({});
+// Per channel index: the tile's <video> and its player ({ key, video, pc, hls, timer }).
+const videoEls = new Map();
 const players = new Map();
+const editable = ["video_label", "audio_label", "preview_height", "video_bitrate_kbps", "audio_bitrate_kbps", "max_fps", "audio_pair", "downmix", "overlay"];
 
 const count = computed(() => channels.value.length);
 const cols = computed(() => {
@@ -70,8 +74,18 @@ async function load() {
   envText.value = await envRes.text();
 }
 
+// The server pushes the status about 10 times a second. Merging it into the existing channel
+// objects keeps the tiles (and their players) in place.
 function applyStatus(payload) {
-  if (payload && payload.channels) channels.value = payload.channels;
+  if (!payload || !payload.channels) return;
+  const byIndex = new Map(channels.value.map((channel) => [channel.index, channel]));
+  const next = payload.channels.map((incoming) => {
+    const existing = byIndex.get(incoming.index);
+    if (!existing) return incoming;
+    Object.assign(existing, incoming);
+    return existing;
+  });
+  if (next.length !== channels.value.length || next.some((channel, i) => channel !== channels.value[i])) channels.value = next;
 }
 
 function connectEvents() {
@@ -88,9 +102,45 @@ function connectEvents() {
   return socket;
 }
 
-async function playTile(channel, video) {
-  if (!video) return;
+// A player restarts only when what it plays changes: the URLs, the video state or flow, or whether
+// audio is routed (the monitor rebuilds the stream with or without an audio track).
+function playbackKey(channel) {
+  const resolved = resolvePlayback(channel);
+  const audioRouted = Boolean(channel.audio?.master_enable && channel.audio?.mxl_flow_id);
+  return JSON.stringify([resolved.whep, resolved.hls, channel.video?.state, channel.video?.mxl_flow_id || "", audioRouted]);
+}
+
+function syncPlayers() {
+  const present = new Set();
+  for (const channel of channels.value) {
+    present.add(channel.index);
+    const video = videoEls.get(channel.index);
+    if (!video || !video.isConnected) continue;
+    const key = playbackKey(channel);
+    const player = players.get(channel.index);
+    if (player && player.key === key && player.video === video) continue;
+    playTile(channel, video, key);
+  }
+  for (const index of [...players.keys()]) {
+    if (!present.has(index)) {
+      stopTile(index);
+      videoEls.delete(index);
+    }
+  }
+}
+
+// Vue calls a function ref on every render of the tile: only a new element counts.
+function setVideoRef(index, el) {
+  if (!el || videoEls.get(index) === el) return;
+  videoEls.set(index, el);
+  syncPlayers();
+}
+
+async function playTile(channel, video, key) {
   stopTile(channel.index);
+  const entry = { key, video };
+  players.set(channel.index, entry);
+  const current = () => players.get(channel.index) === entry;
   video.muted = true;
   const resolved = resolvePlayback(channel);
   if (resolved.blocked && resolved.whep.startsWith("http:") && resolved.hls.startsWith("http:")) {
@@ -100,12 +150,13 @@ async function playTile(channel, video) {
   const hlsUrl = resolved.hls;
   try {
     const pc = new RTCPeerConnection();
+    entry.pc = pc;
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.addTransceiver("audio", { direction: "recvonly" });
     const stream = new MediaStream();
     pc.ontrack = (ev) => {
       stream.addTrack(ev.track);
-      video.srcObject = stream;
+      if (current()) video.srcObject = stream;
     };
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -121,55 +172,63 @@ async function playTile(channel, video) {
         });
       }
     });
+    if (!current()) return;
     const response = await fetch(whep, {
       method: "POST",
       headers: { "Content-Type": "application/sdp" },
       body: pc.localDescription.sdp,
     });
     if (!response.ok) throw new Error(String(response.status));
-    await pc.setRemoteDescription({ type: "answer", sdp: await response.text() });
-    const timer = setTimeout(() => {
-      if (video.readyState < 2) {
-        pc.close();
-        startHls(channel.index, video, hlsUrl);
-      }
+    const answer = await response.text();
+    if (!current()) return;
+    await pc.setRemoteDescription({ type: "answer", sdp: answer });
+    entry.timer = setTimeout(() => {
+      if (current() && video.readyState < 2) startHls(entry, hlsUrl);
     }, 4000);
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-        clearTimeout(timer);
-        pc.close();
-        startHls(channel.index, video, hlsUrl);
-      }
-      if (pc.connectionState === "connected") clearTimeout(timer);
+      if (!current()) return;
+      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") startHls(entry, hlsUrl);
+      if (pc.connectionState === "connected") clearTimeout(entry.timer);
     };
-    players.set(channel.index, { pc, video });
     await video.play().catch(() => {});
   } catch {
-    startHls(channel.index, video, hlsUrl);
+    if (current()) startHls(entry, hlsUrl);
   }
 }
 
-function startHls(index, video, url) {
-  const existing = players.get(index);
-  if (existing && existing.hls) return;
+// Falls back from WHEP to HLS: the peer connection's stream must leave the element first.
+function startHls(entry, url) {
+  if (entry.hls || entry.nativeHls) return;
+  clearTimeout(entry.timer);
+  if (entry.pc) {
+    entry.pc.close();
+    entry.pc = null;
+  }
+  const video = entry.video;
+  video.srcObject = null;
   if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    entry.nativeHls = true;
     video.src = url;
     video.play().catch(() => {});
-    players.set(index, { video });
     return;
   }
   const hls = new Hls({ lowLatencyMode: true, enableWorker: true });
+  entry.hls = hls;
   hls.loadSource(url);
   hls.attachMedia(video);
   hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
-  players.set(index, { ...(existing || {}), hls, video });
 }
 
 function stopTile(index) {
   const player = players.get(index);
   if (!player) return;
+  clearTimeout(player.timer);
   if (player.pc) player.pc.close();
   if (player.hls) player.hls.destroy();
+  if (player.video) {
+    player.video.srcObject = null;
+    if (player.nativeHls) player.video.removeAttribute("src");
+  }
   players.delete(index);
 }
 
@@ -179,29 +238,43 @@ function toggleMute(channel, event) {
   if (video) video.muted = !video.muted;
 }
 
-function onVideo(channel, el) {
-  if (el) playTile(channel, el);
+// The Channels tab edits a copy, so the status pushes do not overwrite what is being typed.
+function syncDrafts() {
+  for (const channel of channels.value) {
+    if (!drafts.value[channel.index]) {
+      drafts.value[channel.index] = Object.fromEntries(editable.map((key) => [key, channel[key]]));
+    }
+  }
+}
+
+function copyEnv() {
+  navigator.clipboard?.writeText(envText.value);
 }
 
 async function saveChannel(channel) {
   message.value = "";
+  const draft = drafts.value[channel.index];
   const response = await fetch(`/api/v1/channels/${channel.index}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      video_label: channel.video_label,
-      audio_label: channel.audio_label,
-      preview_height: Number(channel.preview_height),
-      video_bitrate_kbps: Number(channel.video_bitrate_kbps),
-      audio_bitrate_kbps: Number(channel.audio_bitrate_kbps),
-      max_fps: Number(channel.max_fps),
-      audio_pair: Number(channel.audio_pair),
-      downmix: channel.downmix,
-      overlay: channel.overlay,
+      video_label: draft.video_label,
+      audio_label: draft.audio_label,
+      preview_height: Number(draft.preview_height),
+      video_bitrate_kbps: Number(draft.video_bitrate_kbps),
+      audio_bitrate_kbps: Number(draft.audio_bitrate_kbps),
+      max_fps: Number(draft.max_fps),
+      audio_pair: Number(draft.audio_pair),
+      downmix: draft.downmix,
+      overlay: draft.overlay,
     }),
   });
   messageOk.value = response.ok;
   message.value = response.ok ? `Channel ${channel.index} updated` : await response.text();
+  if (response.ok) {
+    delete drafts.value[channel.index];
+    syncDrafts();
+  }
 }
 
 async function saveConfig() {
@@ -219,6 +292,15 @@ async function saveConfig() {
   message.value = response.ok ? "Config saved" : await response.text();
   if (response.ok) await load();
 }
+
+watch(
+  channels,
+  () => {
+    syncPlayers();
+    syncDrafts();
+  },
+  { flush: "post" },
+);
 
 let socket;
 onMounted(async () => {
@@ -265,7 +347,7 @@ onBeforeUnmount(() => {
           :class="{ expanded: expanded === channel.index, hidden: expanded && expanded !== channel.index }"
           @click="expanded = expanded === channel.index ? 0 : channel.index"
         >
-          <video :ref="(el) => onVideo(channel, el)" autoplay playsinline muted></video>
+          <video :ref="(el) => setVideoRef(channel.index, el)" autoplay playsinline muted></video>
           <div class="meta">
             <div>
               <div class="name">{{ channel.video_label }}</div>
@@ -295,18 +377,18 @@ onBeforeUnmount(() => {
       <p class="sub">Routing is IS-05 only. These settings apply without a restart.</p>
       <article class="panel" v-for="channel in channels" :key="channel.index">
         <h2>Channel {{ channel.index }}</h2>
-        <div class="fields">
-          <div><label>Video label</label><input v-model="channel.video_label" /></div>
-          <div><label>Audio label</label><input v-model="channel.audio_label" /></div>
-          <div><label>Preview height</label><input type="number" v-model.number="channel.preview_height" /></div>
-          <div><label>Video kbit/s</label><input type="number" v-model.number="channel.video_bitrate_kbps" /></div>
-          <div><label>Audio kbit/s</label><input type="number" v-model.number="channel.audio_bitrate_kbps" /></div>
-          <div><label>Max fps (0 = source)</label><input type="number" v-model.number="channel.max_fps" /></div>
-          <div><label>Audio pair</label><input type="number" v-model.number="channel.audio_pair" /></div>
+        <div class="fields" v-if="drafts[channel.index]">
+          <div><label>Video label</label><input v-model="drafts[channel.index].video_label" /></div>
+          <div><label>Audio label</label><input v-model="drafts[channel.index].audio_label" /></div>
+          <div><label>Preview height</label><input type="number" v-model.number="drafts[channel.index].preview_height" /></div>
+          <div><label>Video kbit/s</label><input type="number" v-model.number="drafts[channel.index].video_bitrate_kbps" /></div>
+          <div><label>Audio kbit/s</label><input type="number" v-model.number="drafts[channel.index].audio_bitrate_kbps" /></div>
+          <div><label>Max fps (0 = source)</label><input type="number" v-model.number="drafts[channel.index].max_fps" /></div>
+          <div><label>Audio pair</label><input type="number" v-model.number="drafts[channel.index].audio_pair" /></div>
           <div><label>Downmix</label>
-            <select v-model="channel.downmix"><option>stereo</option><option>mono</option></select>
+            <select v-model="drafts[channel.index].downmix"><option>stereo</option><option>mono</option></select>
           </div>
-          <div><label>Overlay</label><input type="checkbox" v-model="channel.overlay" /></div>
+          <div><label>Overlay</label><input type="checkbox" v-model="drafts[channel.index].overlay" /></div>
         </div>
         <div class="row" style="margin-top:.6rem">
           <button class="btn" @click="saveChannel(channel)">Apply</button>
@@ -361,7 +443,7 @@ onBeforeUnmount(() => {
         <textarea v-model="configText"></textarea>
         <div class="row" style="margin-top:.6rem">
           <button class="btn" @click="saveConfig">Save JSON</button>
-          <button class="btn secondary" @click="navigator.clipboard.writeText(envText)">Copy KEY=value</button>
+          <button class="btn secondary" @click="copyEnv">Copy KEY=value</button>
         </div>
         <textarea readonly v-model="envText" style="margin-top:.6rem"></textarea>
         <p class="msg" :class="messageOk ? 'ok' : 'err'">{{ message }}</p>

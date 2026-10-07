@@ -104,4 +104,37 @@ AudioLevels measureLevels(float const* const* channels, int channelCount, std::s
     }
     return levels;
 }
+std::uint64_t audioSamplesDue(std::uint64_t videoFrames, int rateNum, int rateDen, std::uint64_t samplesPushed)
+{
+    auto const num = static_cast<std::uint64_t>(std::max(rateNum, 1));
+    auto const den = static_cast<std::uint64_t>(std::max(rateDen, 1));
+    auto const covered = videoFrames * 48000ULL * den / num;
+    return covered > samplesPushed ? covered - samplesPushed : 0;
+}
+
+AudioPlan planAudioRead(std::optional<std::uint64_t> cursor, std::uint64_t target, std::uint64_t head, std::uint64_t want, std::uint64_t slack, bool waited)
+{
+    AudioPlan plan;
+    plan.count = want;
+    std::uint64_t const placed = target > want ? target - want : 0;
+    plan.start = cursor ? *cursor : placed;
+    if (cursor)
+    {
+        std::uint64_t const end = *cursor + want;
+        if (end > target + slack || end + slack < target)
+        {
+            plan.start = placed;
+            plan.resync = true;
+        }
+    }
+    if (plan.start + want <= head)
+    {
+        plan.step = AudioStep::Read;
+    }
+    else
+    {
+        plan.step = waited ? AudioStep::Silence : AudioStep::Wait;
+    }
+    return plan;
+}
 } // namespace mwm

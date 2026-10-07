@@ -522,6 +522,7 @@ private:
         pipeAudio_ = withAudio;
         pipeEncoder_ = encoder;
         videoFormat_ = format;
+        frameSamples_.store(std::max(1, 48000 * std::max(format.rateDen, 1) / std::max(format.rateNum, 1)));
         book_.setEncoder(index_, encoder);
         log::info("pipeline_playing", {{"channel", std::to_string(index_)}, {"encoder", encoder}, {"format", format.signature()}, {"audio", withAudio ? "yes" : "no"}});
         return true;
@@ -727,6 +728,28 @@ private:
         return flow == GST_FLOW_OK;
     }
 
+    // Audio the stream owes: as much as the pushed video covers (0 without an audio branch).
+    std::uint64_t audioDue()
+    {
+        std::lock_guard const lock{pipeMu_};
+        if (asrc_ == nullptr)
+        {
+            return 0;
+        }
+        return audioSamplesDue(videoFrames_, videoFormat_.rateNum, videoFormat_.rateDen, audioSamplesPushed_);
+    }
+
+    // Keeps the Opus track continuous while the flow has nothing to give.
+    void pushSilence(std::uint64_t frames)
+    {
+        if (frames == 0)
+        {
+            return;
+        }
+        std::vector<float> silence(static_cast<std::size_t>(frames) * 2, 0.f);
+        pushAudio(silence.data(), static_cast<std::size_t>(frames));
+    }
+
     void publishCounters(double lag)
     {
         auto const now = std::chrono::steady_clock::now();
@@ -930,6 +953,7 @@ private:
             }
             auto const ts = mxlIndexToTimestamp(&info.common.grainRate, index);
             alignTimestamp_.store(ts);
+            alignAtNs_.store(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
             frameSamples_.store(std::max(1, 48000 * format.rateDen / std::max(format.rateNum, 1)));
             grainsRead_.fetch_add(1);
             lastGood = std::chrono::steady_clock::now();
@@ -976,6 +1000,7 @@ private:
                 book_.setProbe(index_, LegKind::Audio, false, false, false, "");
                 closeAudio();
                 audioChannels_ = 0;
+                audioCursor_.reset();
                 sleepMs(40, route, LegKind::Audio);
                 continue;
             }
@@ -984,6 +1009,8 @@ private:
             {
                 book_.setProbe(index_, LegKind::Audio, false, false, false, "domain_not_found");
                 closeAudio();
+                audioCursor_.reset();
+                pushSilence(audioDue());
                 sleepMs(backoffMs(attempt++), route, LegKind::Audio);
                 continue;
             }
@@ -1002,6 +1029,7 @@ private:
             if (!openInstance(domain->path, audioInstance_, audioPath_))
             {
                 book_.setProbe(index_, LegKind::Audio, false, false, false, "domain_not_found");
+                pushSilence(audioDue());
                 sleepMs(backoffMs(attempt++), route, LegKind::Audio);
                 continue;
             }
@@ -1012,14 +1040,24 @@ private:
                 {
                     audioReader_ = nullptr;
                     book_.setProbe(index_, LegKind::Audio, true, false, false, "flow_not_found");
+                    pushSilence(audioDue());
                     sleepMs(backoffMs(attempt++), route, LegKind::Audio);
                     continue;
                 }
                 audioFlow_ = route.flow_id;
                 audioHeadSeen_ = MXL_UNDEFINED_INDEX;
+                audioCursor_.reset();
                 auto const parsed = parseAudioDef(readFlowDef(audioInstance_, route.flow_id));
                 audioChannels_ = parsed.channels;
                 attempt = 0;
+            }
+            // The stream carries exactly as much audio as the pushed video covers, so audio timestamps
+            // never run ahead of the pipeline clock (a live sink would hold the audio branch).
+            std::uint64_t const due = audioDue();
+            if (due == 0)
+            {
+                sleepMs(3, route, LegKind::Audio);
+                continue;
             }
             mxlFlowRuntimeInfo runtime{};
             mxlFlowConfigInfo info{};
@@ -1031,7 +1069,7 @@ private:
                 audioChannels_ = channels;
             }
             // MXL's continuous writer does not set lastWriteTime (only the discrete one does), so an
-            // audio flow is live while its head moves.
+            // audio flow is live while its head moves. A mirror's head moves per replication batch.
             auto const steadyNow = std::chrono::steady_clock::now();
             if (runtime.headIndex != audioHeadSeen_)
             {
@@ -1041,59 +1079,70 @@ private:
                 }
                 audioHeadSeen_ = runtime.headIndex;
             }
-            bool const fresh = runtime.headIndex != MXL_UNDEFINED_INDEX && runtime.headIndex > 480 && steadyNow - audioHeadAt_ < std::chrono::milliseconds(100);
+            bool const fresh = runtime.headIndex != MXL_UNDEFINED_INDEX && runtime.headIndex > 480 && steadyNow - audioHeadAt_ < std::chrono::milliseconds(500);
             if (!fresh)
             {
                 book_.setProbe(index_, LegKind::Audio, true, true, false, "");
-                int const frameSamples = std::max(1, frameSamples_.load());
-                std::vector<float> silence(static_cast<std::size_t>(frameSamples) * 2, 0.f);
-                pushAudio(silence.data(), static_cast<std::size_t>(frameSamples));
-                sleepMs(20, route, LegKind::Audio);
+                audioCursor_.reset();
+                audioWaitSince_.reset();
+                pushSilence(due);
                 continue;
             }
             int const frameSamples = std::max(1, frameSamples_.load());
-            std::uint64_t end = runtime.headIndex;
+            // Where the audio should end: at the newest live video grain's timestamp, or at the head when
+            // the audio arrives later than the video (a mirror of another host's flow).
+            std::uint64_t target = runtime.headIndex;
             std::uint64_t const align = alignTimestamp_.load();
-            if (align != 0)
+            auto const alignAge = std::chrono::duration_cast<std::chrono::nanoseconds>(steadyNow.time_since_epoch()).count() - alignAtNs_.load();
+            if (align != 0 && alignAge < 200000000)
             {
-                end = (align / 1000000000ULL) * 48000ULL + ((align % 1000000000ULL) * 48000ULL) / 1000000000ULL;
-                if (end > runtime.headIndex)
+                std::uint64_t const aligned = (align / 1000000000ULL) * 48000ULL + ((align % 1000000000ULL) * 48000ULL) / 1000000000ULL;
+                target = std::min(aligned, runtime.headIndex);
+            }
+            else if (target > static_cast<std::uint64_t>(frameSamples * std::max(1, cfg_.read_offset_grains)))
+            {
+                target -= static_cast<std::uint64_t>(frameSamples * std::max(1, cfg_.read_offset_grains));
+            }
+            std::uint64_t const want = std::min<std::uint64_t>(due, static_cast<std::uint64_t>(frameSamples) * 4);
+            auto const frameDuration = std::chrono::nanoseconds(1000000000LL * frameSamples / 48000);
+            bool const waited = audioWaitSince_ && steadyNow - *audioWaitSince_ >= frameDuration;
+            auto const plan = planAudioRead(audioCursor_, target, runtime.headIndex, want, static_cast<std::uint64_t>(frameSamples) * 3, waited);
+            if (plan.resync)
+            {
+                resyncs_.fetch_add(1);
+            }
+            if (plan.step == AudioStep::Wait)
+            {
+                if (!audioWaitSince_)
                 {
-                    end = runtime.headIndex;
+                    audioWaitSince_ = steadyNow;
                 }
-            }
-            else if (end > static_cast<std::uint64_t>(frameSamples * std::max(1, cfg_.read_offset_grains)))
-            {
-                end -= static_cast<std::uint64_t>(frameSamples * std::max(1, cfg_.read_offset_grains));
-            }
-            if (end <= static_cast<std::uint64_t>(frameSamples))
-            {
-                sleepMs(10, route, LegKind::Audio);
+                sleepMs(2, route, LegKind::Audio);
                 continue;
             }
-            if (haveAudioIndex_ && end <= lastAudioIndex_)
+            audioWaitSince_.reset();
+            if (plan.step == AudioStep::Silence)
             {
-                book_.setProbe(index_, LegKind::Audio, true, true, true, "");
-                sleepMs(5, route, LegKind::Audio);
+                pushSilence(plan.count);
+                audioCursor_ = plan.start + plan.count;
                 continue;
             }
             mxlWrappedMultiBufferSlice slice{};
-            auto const status = mxlFlowReaderGetSamplesNonBlocking(audioReader_, end, static_cast<std::size_t>(frameSamples), &slice);
-            if (status == MXL_ERR_OUT_OF_RANGE_TOO_LATE)
-            {
-                droppedLate_.fetch_add(1);
-                resyncs_.fetch_add(1);
-                haveAudioIndex_ = false;
-                continue;
-            }
+            auto const status = mxlFlowReaderGetSamplesNonBlocking(audioReader_, plan.start + plan.count, static_cast<std::size_t>(plan.count), &slice);
             if (status != MXL_STATUS_OK)
             {
-                book_.setProbe(index_, LegKind::Audio, true, true, false, "");
-                sleepMs(10, route, LegKind::Audio);
+                // TOO_LATE: the cursor fell out of the ring; it is placed again. Silence keeps the timeline.
+                if (status == MXL_ERR_OUT_OF_RANGE_TOO_LATE)
+                {
+                    droppedLate_.fetch_add(1);
+                    resyncs_.fetch_add(1);
+                }
+                audioCursor_.reset();
+                pushSilence(plan.count);
                 continue;
             }
             std::vector<std::vector<float>> planar;
-            copySamples(slice, static_cast<std::size_t>(frameSamples), planar);
+            copySamples(slice, static_cast<std::size_t>(plan.count), planar);
             std::vector<float const*> ptrs(planar.size());
             for (std::size_t i = 0; i < planar.size(); ++i)
             {
@@ -1101,16 +1150,15 @@ private:
             }
             if (std::chrono::steady_clock::now() - lastLevels > std::chrono::milliseconds(100))
             {
-                auto const levels = measureLevels(ptrs.data(), static_cast<int>(ptrs.size()), static_cast<std::size_t>(frameSamples));
+                auto const levels = measureLevels(ptrs.data(), static_cast<int>(ptrs.size()), static_cast<std::size_t>(plan.count));
                 book_.setLevels(index_, levels.peak_dbfs, levels.rms_dbfs);
                 lastLevels = std::chrono::steady_clock::now();
             }
             auto const selection = selectAudioPair(static_cast<int>(ptrs.size()), settings.audio_pair, settings.downmix);
-            std::vector<float> interleaved(static_cast<std::size_t>(frameSamples) * 2, 0.f);
-            renderAudioPair(ptrs.data(), static_cast<int>(ptrs.size()), static_cast<std::size_t>(frameSamples), selection, interleaved.data());
-            pushAudio(interleaved.data(), static_cast<std::size_t>(frameSamples));
-            lastAudioIndex_ = end;
-            haveAudioIndex_ = true;
+            std::vector<float> interleaved(static_cast<std::size_t>(plan.count) * 2, 0.f);
+            renderAudioPair(ptrs.data(), static_cast<int>(ptrs.size()), static_cast<std::size_t>(plan.count), selection, interleaved.data());
+            pushAudio(interleaved.data(), static_cast<std::size_t>(plan.count));
+            audioCursor_ = plan.start + plan.count;
             book_.setProbe(index_, LegKind::Audio, true, true, true, "");
             book_.setFormat(index_, 0, 0, 0, 1, false, "", audioChannels_);
         }
@@ -1163,14 +1211,15 @@ private:
     std::atomic<std::uint64_t> droppedLate_{0};
     std::atomic<std::uint64_t> resyncs_{0};
     std::atomic<std::uint64_t> alignTimestamp_{0};
+    std::atomic<std::int64_t> alignAtNs_{0}; // steady time of the last alignment (live video only)
     std::atomic<int> frameSamples_{1920};
     std::chrono::steady_clock::time_point rateTick_{};
     std::uint64_t rateFrames_ = 0;
     std::uint64_t rateBytes_ = 0;
     double encodeFps_ = 0;
     double bitrateBps_ = 0;
-    std::uint64_t lastAudioIndex_ = 0;
-    bool haveAudioIndex_ = false;
+    std::optional<std::uint64_t> audioCursor_;                            // flow sample after the last pushed one
+    std::optional<std::chrono::steady_clock::time_point> audioWaitSince_; // waiting for the head since
 };
 } // namespace
 

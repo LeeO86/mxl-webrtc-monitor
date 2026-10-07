@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 
 namespace mwm
 {
@@ -74,16 +75,40 @@ bool writeMediamtxConfig(Config const& cfg, std::string* error)
         {
             std::filesystem::create_directories(path.parent_path());
         }
-        std::ofstream out(path, std::ios::trunc);
-        if (!out)
+        auto const text = renderMediamtxConfig(cfg);
         {
-            if (error != nullptr)
+            std::ifstream current(path, std::ios::binary);
+            std::string const existing((std::istreambuf_iterator<char>(current)), std::istreambuf_iterator<char>());
+            if (current && existing == text)
             {
-                *error = "cannot write " + cfg.mediamtx_config_path;
+                return true;
             }
-            return false;
         }
-        out << renderMediamtxConfig(cfg);
+        // MediaMTX reloads when the file changes: write a temporary file and rename it over the
+        // old one, so it never reads a half-written file (it fell back to its defaults: no API,
+        // no paths).
+        auto const temporary = path.string() + ".tmp";
+        {
+            std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+            if (!out)
+            {
+                if (error != nullptr)
+                {
+                    *error = "cannot write " + cfg.mediamtx_config_path;
+                }
+                return false;
+            }
+            out << text;
+            if (!out.flush())
+            {
+                if (error != nullptr)
+                {
+                    *error = "cannot write " + temporary;
+                }
+                return false;
+            }
+        }
+        std::filesystem::rename(temporary, path);
         return true;
     }
     catch (std::exception const& ex)

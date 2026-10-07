@@ -31,3 +31,42 @@ TEST_CASE("audio pair selection and downmix")
     CHECK(dst[2] == doctest::Approx(0.f));
     CHECK(dst[3] == doctest::Approx(0.f));
 }
+
+TEST_CASE("audio follows the pushed video timeline")
+{
+    // 50p: 960 samples per frame; 59.94: 800.8, floored over the whole count.
+    CHECK(mwm::audioSamplesDue(1, 50, 1, 960) == 0);
+    CHECK(mwm::audioSamplesDue(3, 50, 1, 960) == 1920);
+    CHECK(mwm::audioSamplesDue(3, 50, 1, 5000) == 0); // never negative
+    CHECK(mwm::audioSamplesDue(5, 60000, 1001, 0) == 4004);
+    CHECK(mwm::audioSamplesDue(10, 0, 0, 0) == 480000); // bad rate: 1/1
+}
+
+TEST_CASE("audio reads are placed at the target and then follow the cursor")
+{
+    std::uint64_t const slack = 3 * 960;
+    // First read: ends at the target.
+    auto plan = mwm::planAudioRead(std::nullopt, 100000, 100000, 960, slack, false);
+    CHECK(plan.step == mwm::AudioStep::Read);
+    CHECK(plan.start == 99040);
+    CHECK_FALSE(plan.resync);
+    // A mirror whose head moves 480 samples at a time: the next frame waits for the head, then reads
+    // exactly the samples after the last push (no overlap, no gap).
+    plan = mwm::planAudioRead(100000, 100480, 100480, 960, slack, false);
+    CHECK(plan.step == mwm::AudioStep::Wait);
+    plan = mwm::planAudioRead(100000, 100960, 100960, 960, slack, false);
+    CHECK(plan.step == mwm::AudioStep::Read);
+    CHECK(plan.start == 100000);
+    // The head does not arrive in time: silence for that frame.
+    plan = mwm::planAudioRead(100000, 100480, 100480, 960, slack, true);
+    CHECK(plan.step == mwm::AudioStep::Silence);
+    CHECK(plan.start == 100000);
+    // Far from the target (video resynced, source restarted): placed again.
+    plan = mwm::planAudioRead(100000, 200000, 200000, 960, slack, false);
+    CHECK(plan.resync);
+    CHECK(plan.start == 199040);
+    CHECK(plan.step == mwm::AudioStep::Read);
+    plan = mwm::planAudioRead(300000, 200000, 400000, 960, slack, false);
+    CHECK(plan.resync);
+    CHECK(plan.start == 199040);
+}
