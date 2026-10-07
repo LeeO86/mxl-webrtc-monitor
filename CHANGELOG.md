@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.5
+
+- Audio no longer stalls the stream. Audio timestamps count pushed samples, and 1.0.4 pushed one video frame of audio (960 samples at 50p) each time the audio head moved. A fabrics mirror moves it 480 samples every 10 ms, so the audio ran at twice real time; the live RTSP sink then held the audio branch, every audio push hit a full queue (`grains_dropped_total{reason="queue_full"}`), and MediaMTX got an Opus track without samples. Chrome showed a black picture for HLS and WebRTC although the video was fine (platform: test-all-mon with a mirrored mxl-multiviewer audio output; reproduced on the lab with a fabrics mirror). Now the stream carries exactly as much audio as the pushed video frames cover, read sample by sample after the last pushed sample. Samples that do not arrive within a frame, or a flow that is not readable (not found, no signal, out of the ring), become silence, so the Opus track always has data.
+- Audio that arrives later than the video (a mirror next to local video) is read at its head instead of at the video grain's time; 1.0.4 asked for the aligned samples, got `too late` and retried without pause (`resyncs_total` grew by about 700/s, one core busy). A position more than three frames from the target is placed again and counted in `resyncs_total`. An audio flow counts as live while its head moved within 500 ms (100 ms before, shorter than some writers' batches).
+- Web UI: a tile's player starts again only when its playback URLs, video state, video flow or audio routing change. The `<video>` ref was an inline function, which Vue calls on every render, and the status arrives about 10 times a second, so every tile tore down and renegotiated its WHEP/HLS player every 100 ms and never showed a picture. Status updates are merged into the existing channel objects. The WHEP-to-HLS fallback detaches the WebRTC stream first (HLS never played while `srcObject` was set).
+- Web UI: the Channels tab edits a copy of the settings (the status pushes overwrote what was typed), and "Copy KEY=value" works (it called `navigator` from the template).
+- `mediamtx.yml` is written to a temporary file and renamed over the old one, and not rewritten when unchanged. MediaMTX reloads on every change of the file and read it half written on the lab: it ran on its defaults (no API, "path is not configured").
+- The Compose and Kubernetes examples use the `1.0.5` image.
+
 ## 1.0.4
 
 - Audio is read. MXL's continuous flow writer never sets `lastWriteTime` (only the discrete writer does), and the audio leg took a flow as live only when `lastWriteTime` was less than 100 ms old, so every audio input stayed `no_signal` with `audio_channels` 0 and no meters, whatever wrote it (seen on the platform with mxl-multiviewer, mxl-replay and mxl-test-player audio, local and mirrored). An audio flow is now live while its head index moves (within 100 ms). The integration test checks the audio state as well.

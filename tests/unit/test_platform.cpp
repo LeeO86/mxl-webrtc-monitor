@@ -8,8 +8,10 @@
 #include "ops/mediamtx.hpp"
 #include "util/jsonutil.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 
 TEST_CASE("mediamtx version comes from its info api")
@@ -18,6 +20,26 @@ TEST_CASE("mediamtx version comes from its info api")
     CHECK(mwm::mediamtxVersionFromInfo(R"({"version":"1.20.1"})") == "1.20.1");
     CHECK(mwm::mediamtxVersionFromInfo(R"({"started":"x"})").empty());
     CHECK(mwm::mediamtxVersionFromInfo("not json").empty());
+}
+
+TEST_CASE("mediamtx.yml is replaced in one step and only when it changes")
+{
+    auto const dir = std::filesystem::temp_directory_path() / "mwm-mediamtx-write";
+    std::filesystem::remove_all(dir);
+    auto cfg = mwm::parseConfig({{"MONITOR_PUBLIC_IP", "10.1.2.3"}});
+    cfg.mediamtx_config_path = (dir / "mediamtx.yml").string();
+    std::string error;
+    REQUIRE(mwm::writeMediamtxConfig(cfg, &error));
+    std::ifstream first(cfg.mediamtx_config_path);
+    std::string const text((std::istreambuf_iterator<char>(first)), std::istreambuf_iterator<char>());
+    CHECK(text == mwm::renderMediamtxConfig(cfg));
+    CHECK_FALSE(std::filesystem::exists(cfg.mediamtx_config_path + ".tmp"));
+    // Unchanged content: the file is not touched (MediaMTX would reload on every start).
+    auto const stamp = std::filesystem::last_write_time(cfg.mediamtx_config_path);
+    std::filesystem::last_write_time(cfg.mediamtx_config_path, stamp - std::chrono::hours(1));
+    REQUIRE(mwm::writeMediamtxConfig(cfg, &error));
+    CHECK(std::filesystem::last_write_time(cfg.mediamtx_config_path) == stamp - std::chrono::hours(1));
+    std::filesystem::remove_all(dir);
 }
 
 TEST_CASE("announce addresses reject names and loopback")

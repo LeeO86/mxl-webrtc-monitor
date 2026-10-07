@@ -181,7 +181,11 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
 - Reading position: the reader reads `READ_OFFSET_GRAINS` (default 2) behind the
   flow's head index. For a flow on a mirror domain this keeps the reader behind the
   replication head (see the fabrics agent's `replication_lag_grains`). Audio reads
-  the matching sample window aligned to the same TAI time.
+  the matching sample window aligned to the same TAI time. Audio that arrives later
+  than the video (a mirror of another host's flow next to local video) is read at
+  its head instead; lip sync is then off by that lag. The stream carries exactly as
+  much audio as the pushed video frames cover, read sample by sample after the last
+  pushed sample; samples that are not there in time become silence.
 - If the reader falls behind beyond the ring (too late), it resynchronises to head
   minus offset and counts a `resync` (metric).
 - Format change of the source (new flow or changed `flow_def.json`): the channel
