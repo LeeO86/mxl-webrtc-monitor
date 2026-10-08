@@ -935,12 +935,9 @@ std::map<std::string, std::string> loadConfigFile(std::string const& path, std::
     std::map<std::string, std::string> out;
     for (auto const& [key, value] : root.get<picojson::object>())
     {
+        // Channel objects become CH<n>_* keys (the store writes them so); `channels` also gets the objects.
         if (key == "channels" && value.is<picojson::array>())
         {
-            if (channels == nullptr)
-            {
-                continue;
-            }
             for (auto const& item : value.get<picojson::array>())
             {
                 if (!item.is<picojson::object>())

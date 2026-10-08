@@ -196,6 +196,21 @@ for _ in $(seq 1 40); do
 done
 hls_has_segments
 
+# The channel status shows MediaMTX's path: ready, with the H.264 track.
+mtx=""
+for _ in $(seq 1 20); do
+  mtx="$(curl -sf "http://127.0.0.1:${WEB_PORT}/api/v1/channels" | python3 -c 'import json,sys; m=json.load(sys.stdin)["channels"][0]["mediamtx"]; print("ok" if m["ready"] and "H264" in m["tracks"] else m)')"
+  if [[ "$mtx" == "ok" ]]; then
+    break
+  fi
+  sleep 0.5
+done
+if [[ "$mtx" != "ok" ]]; then
+  echo "mediamtx path state: $mtx" >&2
+  exit 1
+fi
+echo "mediamtx path ready"
+
 # Stop the writer and expect no_signal.
 kill "${PIDS[1]}" 2>/dev/null || true
 wait "${PIDS[1]}" 2>/dev/null || true
@@ -217,7 +232,7 @@ case "$metrics" in
 esac
 page="$(curl -sf "http://127.0.0.1:${WEB_PORT}/")"
 case "$page" in
-  *MXL\ WebRTC\ Monitor*) ;;
+  *'<div id="app">'*) ;;
   *) echo "ui missing" >&2; exit 1 ;;
 esac
 ready="$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:${WEB_PORT}/readyz" || true)"

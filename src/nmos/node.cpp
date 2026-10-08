@@ -121,7 +121,7 @@ std::string NmosNode::summary() const
                 out += ',';
             }
             first = false;
-            out += std::string("{\"id\":\"") + id + "\",\"kind\":\"" + kind + "\",\"label\":\"" + label + "\",\"state\":\"" + stateName(route.state) +
+            out += std::string("{\"id\":\"") + id + "\",\"kind\":\"" + kind + "\",\"label\":\"" + log::jsonEscape(label) + "\",\"state\":\"" + stateName(route.state) +
                    "\",\"sender_id\":" + (route.sender_id.empty() ? "null" : std::string("\"") + route.sender_id + "\"") + ",\"active\":" +
                    (route.master_enable ? "true" : "false") + ",\"mxl_domain_id\":" + (route.domain_id.empty() ? "null" : std::string("\"") + route.domain_id + "\"") +
                    ",\"mxl_flow_id\":" + (route.flow_id.empty() ? "null" : std::string("\"") + route.flow_id + "\"") + "}";

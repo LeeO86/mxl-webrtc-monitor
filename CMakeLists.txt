@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(mxl-webrtc-monitor VERSION 1.0.5 LANGUAGES CXX)
+project(mxl-webrtc-monitor VERSION 1.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -76,6 +76,21 @@ if(mxl_FOUND AND GST_FOUND)
         web/src/main.js
         web/src/App.vue
         web/src/style.css
+        web/src/api.js
+        web/src/store.js
+        web/src/player.js
+        web/src/components/ChannelPicker.vue
+        web/src/components/ChannelTile.vue
+        web/src/components/ChannelsTab.vue
+        web/src/components/IdCode.vue
+        web/src/components/Meters.vue
+        web/src/components/MultiviewTab.vue
+        web/src/components/NmosTab.vue
+        web/src/components/OriginBadge.vue
+        web/src/components/Pill.vue
+        web/src/components/Segmented.vue
+        web/src/components/SettingsTab.vue
+        web/src/components/StatusTab.vue
     )
     set(WEBUI_GENERATED ${CMAKE_CURRENT_BINARY_DIR}/generated/ops/webui_generated.hpp)
     find_program(NPM_EXECUTABLE npm)

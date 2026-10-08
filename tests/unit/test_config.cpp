@@ -59,4 +59,8 @@ TEST_CASE("config file channels array")
     CHECK(cfg.channels[0].video_label == "PGM");
     CHECK(cfg.channels[0].audio_pair == 2);
     CHECK(cfg.channels[0].preview_height == 540);
+    // At start (and for PUT /api/v1/config) the file is read without the channel list: the keys stay.
+    auto const flat = mwm::loadConfigFile(path, nullptr);
+    CHECK(flat.at("CH1_VIDEO_LABEL") == "PGM");
+    CHECK(flat.at("CH1_AUDIO_PAIR") == "2");
 }

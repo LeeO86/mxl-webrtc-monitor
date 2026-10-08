@@ -90,7 +90,8 @@ std::string Api::infoJson() const
     // The sidecar can run another MediaMTX than the pin of the examples.
     auto const running = mediamtxVersion_ ? mediamtxVersion_() : std::string{};
     std::ostringstream out;
-    out << "{\"version\":" << jsonString(info_.version) << ",\"mxl_version\":" << jsonString(info_.mxl_version) << ",\"nmos_cpp\":" << jsonString(info_.nmos_cpp)
+    out << "{\"version\":" << jsonString(info_.version) << ",\"label\":" << jsonString(nodeLabel(store_->get()))
+        << ",\"mxl_version\":" << jsonString(info_.mxl_version) << ",\"nmos_cpp\":" << jsonString(info_.nmos_cpp)
         << ",\"gstreamer\":" << jsonString(info_.gstreamer) << ",\"mediamtx\":" << jsonString(running.empty() ? "unknown" : running)
         << ",\"mediamtx_pin\":" << jsonString(info_.mediamtx)
         << ",\"encoder_available\":" << jsonString(info_.encoder_available) << "}";
@@ -126,8 +127,15 @@ std::string Api::channelsJson() const
             << ",\"preview_height\":" << view.settings.preview_height << ",\"video_bitrate_kbps\":" << view.settings.video_bitrate_kbps
             << ",\"audio_bitrate_kbps\":" << view.settings.audio_bitrate_kbps << ",\"max_fps\":" << view.settings.max_fps
             << ",\"audio_pair\":" << view.settings.audio_pair << ",\"downmix\":" << jsonString(view.settings.downmix)
-            << ",\"overlay\":" << (view.settings.overlay ? "true" : "false") << ",\"viewers\":{\"webrtc\":" << view.viewers_webrtc
-            << ",\"hls\":" << view.viewers_hls << "}," << playbackJson(cfg, view.settings.index) << ",\"meters\":{\"peak_dbfs\":[";
+            << ",\"overlay\":" << (view.settings.overlay ? "true" : "false") << ",\"overlay_label\":" << (view.settings.overlay_label ? "true" : "false")
+            << ",\"overlay_source\":" << (view.settings.overlay_source ? "true" : "false")
+            << ",\"overlay_format\":" << (view.settings.overlay_format ? "true" : "false") << ",\"viewers\":{\"webrtc\":" << view.viewers_webrtc
+            << ",\"hls\":" << view.viewers_hls << "},\"mediamtx\":{\"ready\":" << (view.mediamtx_ready ? "true" : "false") << ",\"tracks\":[";
+        for (std::size_t i = 0; i < view.mediamtx_tracks.size(); ++i)
+        {
+            out << (i != 0 ? "," : "") << jsonString(view.mediamtx_tracks[i]);
+        }
+        out << "]}," << playbackJson(cfg, view.settings.index) << ",\"meters\":{\"peak_dbfs\":[";
         for (std::size_t i = 0; i < view.peak_dbfs.size(); ++i)
         {
             if (i != 0)

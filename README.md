@@ -83,7 +83,21 @@ Channel keys are `CH<n>_VIDEO_LABEL`, `_AUDIO_LABEL`, `_PREVIEW_HEIGHT`, `_VIDEO
 | GET | `/api/v1/config/export` |
 | POST | `/api/v1/config/import` |
 
+`GET /api/v1/info` has the version, `label` (the node label), the MXL, nmos-cpp, GStreamer and MediaMTX versions and the available encoders. Each channel in `GET /api/v1/channels` (and on the WebSocket) has its settings, both IS-05 legs (`state`, `reason`, `master_enable`, domain, flow, sender), format, encoder, viewers, `mediamtx` (`ready` and `tracks` of its MediaMTX path), playback URLs and meters (peak and RMS per input channel). `PATCH /api/v1/channels/{n}` takes the channel settings (`video_label`, `audio_label`, `preview_height`, `video_bitrate_kbps`, `audio_bitrate_kbps`, `max_fps`, `audio_pair`, `downmix`, `overlay`, `overlay_label`, `overlay_source`, `overlay_format`). `PUT /api/v1/config` replaces the configuration file with the given keys. A rejected change leaves the settings as they were.
+
 `/readyz` is 200 only when the MXL root is a directory, MediaMTX answers, and, when `NMOS_REGISTRY_ADDRESS` is set, the Query API returns this node. Export is one JSON document with `version`, `settings` and `secrets_included: false`. Import restores settings and channels into `MONITOR_CONFIG_FILE` and skips keys set by the environment. There is nothing secret to omit.
+
+## Web UI
+
+`http://<node>:<WEB_PORT>/` uses only this API. The tabs keep their place in the URL (`#channels`); the page follows the browser's light or dark theme.
+
+- **Multiview**: every channel's player in a grid (automatic or 1×1 to 4×4); a click shows one channel full size. Each tile shows the state, source, format, audio, encoder, viewers, whether WebRTC or HLS plays, and the audio meters with the monitored pair outlined. Audio is muted until you unmute a tile.
+- **Channels**: one channel's settings (labels, preview size, frame rate, bitrates, audio pair, downmix, overlay), applied at once; its IS-05 routes and its stream (MediaMTX path, WHEP and HLS URLs).
+- **NMOS**: node, registration and every receiver's active IS-05 parameters. There is no source picker: routing is IS-05 only.
+- **Status**: health probes, versions, MediaMTX, and per channel the counters of `/metrics`.
+- **Settings**: every setting with its origin (ENV, FILE, DEFAULT), editing of the non-environment settings into `MONITOR_CONFIG_FILE`, export and import.
+
+Edits stay in the page until they are applied, also across tab switches and reconnects.
 
 ## Exit codes
 
