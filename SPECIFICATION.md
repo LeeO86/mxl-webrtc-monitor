@@ -267,6 +267,12 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
   subscription.
 - **Settings:** effective configuration; env-set keys read-only; config file import
   and export; `KEY=value` export (as in mxl-decklink).
+- 1.1.0 implements these in the look of the sibling UIs (header pills, banners, `#hash` tabs, light
+  and dark theme): Multiview, Channels (settings including the overlay parts, IS-05 routes, stream and
+  MediaMTX path), NMOS, Status (probes, versions, MediaMTX, `/metrics` counters per channel) and Settings
+  (origins, editing of non-environment keys, export, import). Edits are drafts that survive tab switches
+  and reconnects. A player starts again only when its URLs, video state, video flow or audio routing
+  change, or when a WebRTC session that played drops.
 
 ### 6.3 REST
 
@@ -283,6 +289,10 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
 | GET | `/api/v1/nmos` | node id, registry and receiver state |
 
 Routing is only via IS-05. The UI MUST NOT offer a source picker in v1.
+
+Additions for the UI (1.1.0): `label` (node label) in `/api/v1/info`; `overlay_label`,
+`overlay_source`, `overlay_format` and `mediamtx` (`ready`, `tracks` of the channel's MediaMTX
+path) in each channel of `/api/v1/channels` and the events.
 
 ### 6.4 Ops endpoints
 

@@ -65,6 +65,8 @@ void ChannelBook::reset(Config const& cfg)
                 view.bitrate_bps = previous.bitrate_bps;
                 view.viewers_webrtc = previous.viewers_webrtc;
                 view.viewers_hls = previous.viewers_hls;
+                view.mediamtx_ready = previous.mediamtx_ready;
+                view.mediamtx_tracks = previous.mediamtx_tracks;
                 view.source_label = previous.source_label;
                 view.latency_count = previous.latency_count;
                 view.latency_sum = previous.latency_sum;
@@ -213,6 +215,16 @@ void ChannelBook::setViewers(int channel, int webrtc, int hls)
     {
         view->viewers_webrtc = webrtc;
         view->viewers_hls = hls;
+    }
+}
+
+void ChannelBook::setMediamtxPath(int channel, bool ready, std::vector<std::string> tracks)
+{
+    std::lock_guard const lock{mu_};
+    if (auto* view = find(channel))
+    {
+        view->mediamtx_ready = ready;
+        view->mediamtx_tracks = std::move(tracks);
     }
 }
 

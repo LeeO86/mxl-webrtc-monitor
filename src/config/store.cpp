@@ -54,6 +54,8 @@ std::string ConfigStore::configFile() const
 Config ConfigStore::updateFile(std::map<std::string, std::string> const& patch, bool* restart)
 {
     std::lock_guard const lock{mu_};
+    auto file = file_;
+    bool global = false;
     for (auto const& [key, value] : patch)
     {
         auto const it = origin_.find(key);
@@ -61,13 +63,14 @@ Config ConfigStore::updateFile(std::map<std::string, std::string> const& patch, 
         {
             throw ConfigError(key + " is set by the environment and is read-only");
         }
-        file_[key] = value;
-        if (!isRuntimeKey(key))
-        {
-            restart_ = true;
-        }
+        file[key] = value;
+        global = global || !isRuntimeKey(key);
     }
-    cfg_ = loadLayered(file_, env_, {}, &origin_);
+    auto origin = origin_;
+    cfg_ = loadLayered(file, env_, {}, &origin);
+    file_ = std::move(file);
+    origin_ = std::move(origin);
+    restart_ = restart_ || global;
     persistUnlocked();
     if (restart != nullptr)
     {
@@ -115,6 +118,7 @@ Config ConfigStore::importDocument(std::map<std::string, std::string> const& set
 void ConfigStore::replaceFile(std::map<std::string, std::string> const& fileLayer)
 {
     std::lock_guard const lock{mu_};
+    bool global = false;
     for (auto const& [key, value] : fileLayer)
     {
         (void)value;
@@ -123,13 +127,13 @@ void ConfigStore::replaceFile(std::map<std::string, std::string> const& fileLaye
         {
             throw ConfigError(key + " is set by the environment and is read-only");
         }
-        if (!isRuntimeKey(key))
-        {
-            restart_ = true;
-        }
+        global = global || !isRuntimeKey(key);
     }
+    auto origin = origin_;
+    cfg_ = loadLayered(fileLayer, env_, {}, &origin);
     file_ = fileLayer;
-    cfg_ = loadLayered(file_, env_, {}, &origin_);
+    origin_ = std::move(origin);
+    restart_ = restart_ || global;
     persistUnlocked();
 }
 

@@ -31,6 +31,11 @@ GStreamer packages on Ubuntu 24.04: `gstreamer1.0-plugins-base`, `gstreamer1.0-p
 13. **NVENC element is `nvcudah264enc`, not `nvh264enc` (spec §5.5).** With driver 595.84 `nvh264enc preset=low-latency-hq` fails at caps time with "Selected preset not supported", and `nvh264enc` cannot take the P1-P7 presets. `nvcudah264enc` (GStreamer 1.24, same plugin) can. An encoder error after PLAYING also falls back to x264 for that channel, as §5.5 asks for session failures.
 14. **Audio follows the pushed video (1.0.5).** Audio timestamps count pushed samples. 1.0.4 pushed one video frame of audio each time the audio head moved; a fabrics mirror moves it 480 samples every 10 ms, so the audio ran at twice real time, `rtspclientsink` held the audio branch and MediaMTX got an Opus track without samples (platform test-all-mon, lab repro). Now the audio pushed equals the samples the pushed video frames cover, read from a cursor after the last pushed sample; a cursor more than three frames from the alignment target is placed again (`resyncs_total`), a gap becomes silence. Late audio (mirror) is read at its head, unaligned.
 
+15. **Web UI 1.1.0** follows mxl-test-player 1.1.0, mxl-replay 1.3 and mxl-multiviewer 1.2 (same `style.css` tokens and rules, `Pill`, `Segmented`, tabs with `#hash`, theme from `prefers-color-scheme`). It stays one embedded HTML file (`vite-plugin-singlefile`). The multiview tab stays mounted, so other tabs do not stop its players. Each tile owns its player (`web/src/player.js`, the 1.0.5 logic) and starts it again only when `playbackKey` changes; a WebRTC session that played and then drops starts again after 1.5 s (a settings change rebuilds the channel's stream, and 1.0.5 then switched to HLS for good). Channel drafts and settings edits live in `web/src/store.js`. The Status tab reads its counters from `/metrics` instead of a new API. Settings are saved with `PUT /api/v1/config`, which replaces the file layer, so the page sends every `file` key plus the edits; channel keys are edited on the Channels tab (`PATCH`).
+16. **MediaMTX path state (1.1.0).** The viewer poll (`GET /v3/paths/list`, once a second) also keeps `ready` and `tracks` per `ch<n>` path, parsed by `mediamtxPathsFromList`. A channel without a path is reset to not ready and 0 viewers. The HTTP client joins chunked bodies: MediaMTX sends that list chunked above 2 KiB, and before 1.1.0 the viewers stayed 0 with two or more paths.
+17. **MediaMTX RTSP is TCP only (1.1.0).** The generated `mediamtx.yml` sets `rtspTransports: [tcp]`, as the channels publish with `protocols=tcp`. Otherwise every MediaMTX binds UDP 8000 and 8001, and a second monitor on the host cannot start its sidecar.
+18. **IS-04 receiver labels stay `Monitor <n> Video` / `Monitor <n> Audio`.** `CH<n>_VIDEO_LABEL` and `CH<n>_AUDIO_LABEL` name the channel in the UI, `/api/v1/channels`, `/api/v1/nmos` and the overlay; the registered receivers keep the default labels (spec §4.1 says configurable; open).
+
 ## 3. Process
 
 One nmos-cpp node exposes a video receiver and an audio receiver per channel. Each channel has a video reader thread and an audio reader thread. They resolve the domain on every attempt (no negative cache), open the MXL reader, and push into a leaky `appsrc`. A slow encoder drops the oldest buffer and increments `grains_dropped_total{reason="queue_full"}`. Falling out of the ring resynchronises to head minus `READ_OFFSET_GRAINS` and increments `resyncs_total`.
@@ -39,8 +44,8 @@ The video thread publishes an H.264 elementary stream. The audio thread publishe
 
 ## 4. Tests
 
-- Unit tests cover config precedence, IS-05 UUID validation, UUIDv5 ids, the channel state machine, domain scan including mirror domains, audio pair selection, backoff, public WHEP/HLS URL parsing, announce-address checks, query-port defaults, tags, config export/import, and IS-05 state reload.
-- `tests/integration/monitor.sh` writes a v210 and float32 flow, PATCHes channel 1, waits for `running` (video and audio), checks that the HLS playlist grows segments, stops the writer and expects `no_signal` (video and audio), activates a missing flow and expects `waiting`, then creates that flow and expects `running` without another PATCH. It sets `MONITOR_HLS_PUBLIC_URL` and fetches the playlist through the URL the API reports. It then sends SIGTERM and expects exit 143, the node gone from the Query API, and a decoy domain left in place with `MXL_CLEANUP_ON_EXIT=true`.
+- Unit tests cover config precedence, IS-05 UUID validation, UUIDv5 ids, the channel state machine, domain scan including mirror domains, audio pair selection, backoff, public WHEP/HLS URL parsing, announce-address checks, query-port defaults, tags, config export/import, IS-05 state reload, the MediaMTX path list, the channel status fields of 1.1.0 and the info label, and that a rejected `PATCH` or `PUT` leaves the settings as they were.
+- `tests/integration/monitor.sh` writes a v210 and float32 flow, PATCHes channel 1, waits for `running` (video and audio), checks that the HLS playlist grows segments and that the channel reports its MediaMTX path ready with an H.264 track, stops the writer and expects `no_signal` (video and audio), activates a missing flow and expects `waiting`, then creates that flow and expects `running` without another PATCH. It sets `MONITOR_HLS_PUBLIC_URL` and fetches the playlist through the URL the API reports. It then sends SIGTERM and expects exit 143, the node gone from the Query API, and a decoy domain left in place with `MXL_CLEANUP_ON_EXIT=true`.
 - Hardware checks in spec §10 (NVENC on A4000 and L4, 4 and 16 channels, browser WebRTC, HLS with UDP blocked) are not run in CI. A lab run on an NVIDIA A16 is in the README ("Hardware check"); A4000, L4 and the browser checks are still open.
 
 ## 5. Public WHEP and HLS URLs
@@ -51,8 +56,8 @@ origins. When set, `/api/v1/channels` returns
 `playback.public.whep` / `playback.public.hls` is true. The page does not
 rewrite a public URL. When a setting is empty, that URL stays
 `http://<MONITOR_PUBLIC_IP>:<port>/ch<n>/...` and the page still replaces only
-the hostname. An `https:` page shows a tile hint when a playback URL is still
-`http:`. ICE and `webrtcAdditionalHosts` stay on `MONITOR_PUBLIC_IP`.
+the hostname. An `https:` page shows a banner when a playback URL is still
+`http:`, and a hint on a tile that can play neither. ICE and `webrtcAdditionalHosts` stay on `MONITOR_PUBLIC_IP`.
 
 A same-origin proxy of WHEP and HLS through the monitor's own web server is
 not implemented.

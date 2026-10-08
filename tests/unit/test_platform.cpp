@@ -6,6 +6,7 @@
 #include "nmos/connections.hpp"
 #include "ops/api.hpp"
 #include "ops/mediamtx.hpp"
+#include "util/httpclient.hpp"
 #include "util/jsonutil.hpp"
 
 #include <chrono>
@@ -20,6 +21,32 @@ TEST_CASE("mediamtx version comes from its info api")
     CHECK(mwm::mediamtxVersionFromInfo(R"({"version":"1.20.1"})") == "1.20.1");
     CHECK(mwm::mediamtxVersionFromInfo(R"({"started":"x"})").empty());
     CHECK(mwm::mediamtxVersionFromInfo("not json").empty());
+}
+
+TEST_CASE("mediamtx path list gives each channel's stream state")
+{
+    auto const paths = mwm::mediamtxPathsFromList(
+        R"({"itemCount":3,"items":[{"name":"ch1","ready":true,"tracks":["Opus","H264"],"readers":[{"type":"webRTCSession","id":"a"},{"type":"hlsMuxer","id":"b"},{"type":"webRTCSession","id":"c"}]},)"
+        R"({"name":"ch12","ready":false,"tracks":[],"readers":[]},{"name":"other","ready":true},{"name":"chx","ready":true}]})");
+    REQUIRE(paths.size() == 2);
+    CHECK(paths[0].channel == 1);
+    CHECK(paths[0].ready);
+    CHECK(paths[0].tracks == std::vector<std::string>{"Opus", "H264"});
+    CHECK(paths[0].webrtc == 2);
+    CHECK(paths[0].hls == 1);
+    CHECK(paths[1].channel == 12);
+    CHECK_FALSE(paths[1].ready);
+    CHECK(paths[1].tracks.empty());
+    CHECK(mwm::mediamtxPathsFromList("not json").empty());
+    CHECK(mwm::mediamtxPathsFromList(R"({"items":{}})").empty());
+}
+
+TEST_CASE("chunked http bodies are joined")
+{
+    CHECK(mwm::decodeChunked("7\r\n{\"a\":1,\r\n6\r\n\"b\":2}\r\n0\r\n\r\n") == "{\"a\":1,\"b\":2}");
+    CHECK(mwm::decodeChunked("1a;ext=1\r\nabcdefghijklmnopqrstuvwxyz\r\n0\r\n\r\n") == "abcdefghijklmnopqrstuvwxyz");
+    CHECK(mwm::decodeChunked("zz\r\nabc").empty());
+    CHECK(mwm::decodeChunked("10\r\nshort").empty());
 }
 
 TEST_CASE("mediamtx.yml is replaced in one step and only when it changes")
@@ -100,6 +127,7 @@ TEST_CASE("platform settings and query defaults")
     CHECK(explicitQuery.mediamtx_config_path == "/tmp/custom.yml");
     auto const yml = mwm::renderMediamtxConfig(explicitQuery);
     CHECK(yml.find("metricsAddress: 127.0.0.1:9100") != std::string::npos);
+    CHECK(yml.find("rtspTransports: [tcp]\n") != std::string::npos);
     CHECK(yml.find("10.1.2.3") != std::string::npos);
 
     CHECK_THROWS_AS(mwm::parseConfig({{"MONITOR_PUBLIC_IP", "10.1.2.3"}, {"NMOS_TAGS", "[]"}}), mwm::ConfigError);

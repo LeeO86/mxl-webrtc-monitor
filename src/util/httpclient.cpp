@@ -7,11 +7,44 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <sstream>
 
 namespace mwm
 {
+std::string decodeChunked(std::string const& body)
+{
+    std::string out;
+    std::size_t pos = 0;
+    while (pos < body.size())
+    {
+        auto const lineEnd = body.find("\r\n", pos);
+        if (lineEnd == std::string::npos)
+        {
+            break;
+        }
+        std::size_t size = 0;
+        try
+        {
+            size = std::stoul(body.substr(pos, lineEnd - pos), nullptr, 16);
+        }
+        catch (...)
+        {
+            break;
+        }
+        pos = lineEnd + 2;
+        if (size == 0 || pos + size > body.size())
+        {
+            break;
+        }
+        out.append(body, pos, size);
+        pos += size + 2;
+    }
+    return out;
+}
+
 HttpGetResult httpGet(std::string const& url, int timeoutMs)
 {
     HttpGetResult result;
@@ -98,6 +131,13 @@ HttpGetResult httpGet(std::string const& url, int timeoutMs)
     std::string version;
     line >> version >> result.status;
     result.body = raw.substr(headerEnd + 4);
+    // MediaMTX sends larger answers (GET /v3/paths/list with two or more paths) chunked.
+    auto headers = raw.substr(0, headerEnd);
+    std::transform(headers.begin(), headers.end(), headers.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (headers.find("transfer-encoding: chunked") != std::string::npos)
+    {
+        result.body = decodeChunked(result.body);
+    }
     return result;
 }
 } // namespace mwm

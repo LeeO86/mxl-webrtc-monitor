@@ -18,7 +18,6 @@
 #include <gst/gst.h>
 
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <filesystem>
@@ -64,62 +63,25 @@ void refreshViewers(mwm::Config const& cfg, mwm::ChannelBook& book)
     {
         return;
     }
-    std::string err;
-    auto const root = mwm::json::parse(response.body, &err);
-    if (!err.empty() || !root.is<picojson::object>())
+    // A channel without a path has no stream in MediaMTX (the path goes when its publisher does).
+    std::vector<bool> seen(static_cast<std::size_t>(cfg.monitor_channels) + 1, false);
+    for (auto const& path : mwm::mediamtxPathsFromList(response.body))
     {
-        return;
+        if (path.channel < 1 || path.channel > cfg.monitor_channels)
+        {
+            continue;
+        }
+        seen[static_cast<std::size_t>(path.channel)] = true;
+        book.setViewers(path.channel, path.webrtc, path.hls);
+        book.setMediamtxPath(path.channel, path.ready, path.tracks);
     }
-    auto const& obj = root.get<picojson::object>();
-    auto const items = obj.find("items");
-    if (items == obj.end() || !items->second.is<picojson::array>())
+    for (int index = 1; index <= cfg.monitor_channels; ++index)
     {
-        return;
-    }
-    for (auto const& item : items->second.get<picojson::array>())
-    {
-        if (!item.is<picojson::object>())
+        if (!seen[static_cast<std::size_t>(index)])
         {
-            continue;
+            book.setViewers(index, 0, 0);
+            book.setMediamtxPath(index, false, {});
         }
-        auto const name = mwm::json::fieldString(item, "name");
-        if (name.rfind("ch", 0) != 0)
-        {
-            continue;
-        }
-        int index = 0;
-        try
-        {
-            index = std::stoi(name.substr(2));
-        }
-        catch (...)
-        {
-            continue;
-        }
-        int webrtc = 0;
-        int hls = 0;
-        auto const& itemObj = item.get<picojson::object>();
-        auto const readers = itemObj.find("readers");
-        if (readers != itemObj.end() && readers->second.is<picojson::array>())
-        {
-            for (auto const& reader : readers->second.get<picojson::array>())
-            {
-                auto type = mwm::json::fieldString(reader, "type");
-                for (auto& c : type)
-                {
-                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                }
-                if (type.find("webrtc") != std::string::npos)
-                {
-                    ++webrtc;
-                }
-                else if (type.find("hls") != std::string::npos)
-                {
-                    ++hls;
-                }
-            }
-        }
-        book.setViewers(index, webrtc, hls);
     }
 }
 

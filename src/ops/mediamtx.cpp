@@ -3,6 +3,7 @@
 #include "util/jsonutil.hpp"
 #include "util/net.hpp"
 
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -42,6 +43,9 @@ std::string renderMediamtxConfig(Config const& cfg)
     yml += "metricsAddress: 127.0.0.1:" + std::to_string(metricsPort) + "\n";
     yml += "rtsp: true\n";
     yml += "rtspAddress: " + rtspAddr + "\n";
+    // The channels publish over TCP. Without UDP, MediaMTX binds no RTP/RTCP ports (8000/8001 for every
+    // instance), so two monitors on one host need only the ports in the README.
+    yml += "rtspTransports: [tcp]\n";
     yml += "rtmp: false\n";
     yml += "hls: true\n";
     yml += "hlsAddress: :" + std::to_string(cfg.mediamtx_hls_port) + "\n";
@@ -141,5 +145,68 @@ std::string mediamtxVersionFromInfo(std::string const& body)
         version.erase(0, 1);
     }
     return version;
+}
+
+std::vector<MediamtxPath> mediamtxPathsFromList(std::string const& body)
+{
+    std::vector<MediamtxPath> out;
+    std::string err;
+    auto const root = json::parse(body, &err);
+    if (!err.empty() || !root.is<picojson::object>())
+    {
+        return out;
+    }
+    auto const& obj = root.get<picojson::object>();
+    auto const items = obj.find("items");
+    if (items == obj.end() || !items->second.is<picojson::array>())
+    {
+        return out;
+    }
+    for (auto const& item : items->second.get<picojson::array>())
+    {
+        auto const name = json::fieldString(item, "name");
+        if (name.size() < 3 || name.size() > 4 || name.rfind("ch", 0) != 0 || name.find_first_not_of("0123456789", 2) != std::string::npos)
+        {
+            continue;
+        }
+        MediamtxPath path;
+        path.channel = std::stoi(name.substr(2));
+        auto const& itemObj = item.get<picojson::object>();
+        auto const ready = itemObj.find("ready");
+        path.ready = ready != itemObj.end() && ready->second.is<bool>() && ready->second.get<bool>();
+        auto const tracks = itemObj.find("tracks");
+        if (tracks != itemObj.end() && tracks->second.is<picojson::array>())
+        {
+            for (auto const& track : tracks->second.get<picojson::array>())
+            {
+                if (track.is<std::string>())
+                {
+                    path.tracks.push_back(track.get<std::string>());
+                }
+            }
+        }
+        auto const readers = itemObj.find("readers");
+        if (readers != itemObj.end() && readers->second.is<picojson::array>())
+        {
+            for (auto const& reader : readers->second.get<picojson::array>())
+            {
+                auto type = json::fieldString(reader, "type");
+                for (auto& c : type)
+                {
+                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                }
+                if (type.find("webrtc") != std::string::npos)
+                {
+                    ++path.webrtc;
+                }
+                else if (type.find("hls") != std::string::npos)
+                {
+                    ++path.hls;
+                }
+            }
+        }
+        out.push_back(std::move(path));
+    }
+    return out;
 }
 } // namespace mwm

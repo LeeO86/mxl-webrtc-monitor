@@ -47,6 +47,8 @@ struct ChannelView
     double bitrate_bps = 0;
     int viewers_webrtc = 0;
     int viewers_hls = 0;
+    bool mediamtx_ready = false;
+    std::vector<std::string> mediamtx_tracks;
     std::string source_label;
     std::uint64_t latency_count = 0;
     double latency_sum = 0;
@@ -67,6 +69,7 @@ public:
     void setLevels(int channel, std::vector<double> peak, std::vector<double> rms);
     void setSourceLabel(int channel, std::string const& label);
     void setViewers(int channel, int webrtc, int hls);
+    void setMediamtxPath(int channel, bool ready, std::vector<std::string> tracks);
     void observeLatency(int channel, double seconds);
 
     std::vector<ChannelView> snapshot() const;

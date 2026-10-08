@@ -11,7 +11,7 @@ services:
     command: ["python", "/fake_registry.py", "3210", "3211"]
 
   writer:
-    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.5
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.1.0
     network_mode: host
     user: "0:0"
     entrypoint: ["/usr/local/bin/mxl-flow-writer"]
@@ -40,14 +40,14 @@ services:
   # The monitor runs as uid 1000 and its image has no /config: a new named volume is owned by
   # root and the monitor exits 75 (cannot write mediamtx.yml). This one-shot gives it to uid 1000.
   config-owner:
-    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.5
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.1.0
     user: "0:0"
     entrypoint: ["chown", "1000:1000", "/config"]
     volumes:
       - mtx-config:/config
 
   monitor:
-    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.5
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.1.0
     network_mode: host
     depends_on:
       registry:
