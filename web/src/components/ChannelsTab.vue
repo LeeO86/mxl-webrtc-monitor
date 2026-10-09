@@ -1,6 +1,6 @@
 <script setup>
 // Channels (§6.2): the settings of the selected channel as a draft (Apply, Revert), its IS-05 routes
-// (read only: routing is IS-05), and its stream (format, encoder, viewers, MediaMTX path, URLs).
+// (read only: routing is IS-05), its stream (format, encoder, viewers, MediaMTX path, URLs) and its TSL tally.
 import { computed } from "vue";
 import ChannelPicker from "./ChannelPicker.vue";
 import IdCode from "./IdCode.vue";
@@ -8,9 +8,9 @@ import Meters from "./Meters.vue";
 import OriginBadge from "./OriginBadge.vue";
 import Pill from "./Pill.vue";
 import Segmented from "./Segmented.vue";
-import { STATE_TEXT, copyText, pairChannels, reasonText, stateKind } from "../api.js";
+import { STATE_TEXT, TALLY, TALLY_KIND, copyText, pairChannels, reasonText, stateKind } from "../api.js";
 import { resolvePlayback } from "../player.js";
-import { applyDraft, drafts, hasConfigFile, isDirty, live, originOf, receiverOf, revertDraft, selectedChannel, settingsOf } from "../store.js";
+import { applyDraft, drafts, hasConfigFile, isDirty, live, originOf, receiverOf, revertDraft, selectedChannel, settingsOf, tslEnabled } from "../store.js";
 
 const c = selectedChannel;
 const d = computed(() => c.value && drafts[c.value.index]?.value);
@@ -123,6 +123,11 @@ async function copy(text) {
           <label class="check"><input v-model="d.overlay_format" type="checkbox" :disabled="!d.overlay || locked('overlay_format')" /> Format</label>
         </div>
 
+        <div class="group-caption">Tally (TSL)</div>
+        <div class="row tight">
+          <label class="check"><input v-model="d.tally_text" type="checkbox" :disabled="locked('tally_text')" /> Text tally as label background</label>
+        </div>
+
         <p class="note">
           These apply at once. A new preview size, frame rate or bitrate rebuilds the channel's stream: its players reconnect.
           {{ hasConfigFile ? "They are saved to the configuration file." : "MONITOR_CONFIG_FILE is not set: they last until the monitor restarts." }}
@@ -198,6 +203,27 @@ async function copy(text) {
           <a :href="urls.hls" target="_blank" rel="noopener" class="small">Open</a>
           <button class="btn small secondary" @click="copy(urls.hls)">Copy</button>
         </div>
+      </div>
+
+      <div class="panel">
+        <h3>Tally (TSL)</h3>
+        <dl class="kv">
+          <dt>Left lamp (LH)</dt>
+          <dd><Pill :text="TALLY[c.tsl_lh]" :kind="TALLY_KIND[c.tsl_lh]" /></dd>
+          <dt>Text tally</dt>
+          <dd><Pill :text="TALLY[c.tsl_text_tally]" :kind="TALLY_KIND[c.tsl_text_tally]" /></dd>
+          <dt>Right lamp (RH)</dt>
+          <dd><Pill :text="TALLY[c.tsl_rh]" :kind="TALLY_KIND[c.tsl_rh]" /></dd>
+          <dt>Border</dt>
+          <dd><Pill :text="TALLY[c.tally]" :kind="TALLY_KIND[c.tally]" /></dd>
+          <dt>Text</dt>
+          <dd>{{ c.tsl_text || "–" }}</dd>
+        </dl>
+        <p class="note">
+          <template v-if="tslEnabled">TSL UMD 5.0 on {{ live.config.values.TSL_UDP_PORT }}/udp and {{ live.config.values.TSL_TCP_PORT }}/tcp.</template>
+          <template v-else>The TSL receiver is off (<code>TSL_ENABLE</code>).</template>
+          Display index 0 is channel 1, index 1 channel 2, and so on, unless <code>TSL_MAP</code> says otherwise. The border shows the text tally, else RH, else LH.
+        </p>
       </div>
     </div>
   </div>

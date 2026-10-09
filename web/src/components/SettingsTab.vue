@@ -16,6 +16,7 @@ const GROUPS = [
   { title: "Channels and encoding", test: /^(MONITOR_(CHANNELS|PREVIEW_HEIGHT|MAX_FPS|VIDEO_BITRATE_KBPS|AUDIO_BITRATE_KBPS)|READ_OFFSET_GRAINS|ENCODER)$/ },
   { title: "Playback and MediaMTX", test: /^(MONITOR_(PUBLIC_IP|WHEP_PUBLIC_URL|HLS_PUBLIC_URL)|MEDIAMTX_)/ },
   { title: "NMOS", test: /^(NMOS_|HOST_ID)/ },
+  { title: "Tally (TSL)", test: /^TSL_/ },
   { title: "MXL, files and process", test: /./ },
 ];
 // One line per key, from the README settings table.
@@ -56,6 +57,11 @@ const DESCRIPTIONS = {
   WEB_PORT: "This UI, the API, health and metrics.",
   LOG_LEVEL: "Log level.",
   METRICS_AUDIO_PEAK: "Publish per-input peak gauges.",
+  TSL_ENABLE: "Listen for TSL UMD 5.0 tally.",
+  TSL_UDP_PORT: "TSL UDP port.",
+  TSL_TCP_PORT: "TSL TCP port (DLE/STX framing).",
+  TSL_SCREEN: "Only this TSL screen (-1: every screen).",
+  TSL_MAP: "TSL display to channel, e.g. 0:1,1:2 (empty: display i is channel i+1).",
   MONITOR_CONFIG_FILE: "This configuration file (environment only).",
 };
 

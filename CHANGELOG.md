@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0
+
+TSL UMD 5.0 tally per channel (platform request T3). Off by default, so existing deployments are unchanged.
+
+- Tally receiver, the same as mxl-multiviewer 1.3.0's: `TSL_ENABLE=true` listens on `TSL_UDP_PORT` (default 8912) and `TSL_TCP_PORT` (default 8913, DLE/STX framing; DLE/ETX is accepted, not required). UTF-16LE labels (surrogate pairs included) become UTF-8; screen control data and control data messages are skipped. With an empty `TSL_MAP`, display index `i` is channel `i+1` (0-based, as in the multiviewer); `TSL_MAP` (`display:channel` pairs) maps them otherwise, and `TSL_SCREEN` (default -1: every screen) accepts one screen only. A TSL port that cannot be bound exits 75; an invalid `TSL_MAP` or `TSL_SCREEN` exits 78.
+- The defaults are not the multiviewer's 8910/8911: both run with host networking, and a monitor and a multiviewer on one host would otherwise collide.
+- API (backwards compatible): each channel in `GET /api/v1/channels` and on the WebSocket has `tsl_lh`, `tsl_rh`, `tsl_text_tally` (0 off, 1 red, 2 green, 3 amber), `tally` (the border colour: text tally, else RH, else LH) and `tsl_text`, the multiviewer's field names. The new channel setting `tally_text` (`CH<n>_TALLY_TEXT`, default false) is in the status and taken by `PATCH /api/v1/channels/{n}`.
+- Web UI: with TSL on, each Multiview tile has a left lamp (LH) and a right lamp (RH) at the ends of its title (an off lamp is not drawn) and a border around the picture in the `tally` colour. With `tally_text` the channel label sits on the text tally colour. The Channels tab has the `tally_text` switch and the channel's tally fields; the Settings tab groups the `TSL_*` keys. The tally is not burned into the stream.
+- The Compose and Kubernetes examples use the `1.2.0` image.
+
 ## 1.1.0
 
 - New web UI in the look of the other LeeO86 media functions (mxl-test-player, mxl-replay, mxl-multiviewer, mxl-st2110-gateway, mxl-browser-source): header with the node label, running, waiting, no-signal, MediaMTX, registration and connection pills and the versions; banners for a lost API, lost live updates, a needed restart, playback blocked on https and failed actions; tabs in the URL hash; light and dark theme. Every API function has a control:

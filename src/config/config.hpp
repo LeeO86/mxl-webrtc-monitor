@@ -27,6 +27,7 @@ struct ChannelSettings
     bool overlay_label = true;
     bool overlay_source = true;
     bool overlay_format = true;
+    bool tally_text = false;
 };
 
 struct Config
@@ -67,6 +68,11 @@ struct Config
     int web_port = 8100;
     std::string log_level = "info";
     bool metrics_audio_peak = false;
+    bool tsl_enable = false;
+    int tsl_udp_port = 8912;
+    int tsl_tcp_port = 8913;
+    int tsl_screen = -1;
+    std::string tsl_map;
     std::string config_file;
     std::vector<ChannelSettings> channels;
 

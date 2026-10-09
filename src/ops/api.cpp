@@ -1,5 +1,6 @@
 #include "ops/api.hpp"
 
+#include "tally/tsl.hpp"
 #include "util/jsonutil.hpp"
 #include "util/logging.hpp"
 #include "version.hpp"
@@ -129,8 +130,10 @@ std::string Api::channelsJson() const
             << ",\"audio_pair\":" << view.settings.audio_pair << ",\"downmix\":" << jsonString(view.settings.downmix)
             << ",\"overlay\":" << (view.settings.overlay ? "true" : "false") << ",\"overlay_label\":" << (view.settings.overlay_label ? "true" : "false")
             << ",\"overlay_source\":" << (view.settings.overlay_source ? "true" : "false")
-            << ",\"overlay_format\":" << (view.settings.overlay_format ? "true" : "false") << ",\"viewers\":{\"webrtc\":" << view.viewers_webrtc
-            << ",\"hls\":" << view.viewers_hls << "},\"mediamtx\":{\"ready\":" << (view.mediamtx_ready ? "true" : "false") << ",\"tracks\":[";
+            << ",\"overlay_format\":" << (view.settings.overlay_format ? "true" : "false") << ",\"tally_text\":" << (view.settings.tally_text ? "true" : "false")
+            << ",\"tally\":" << effectiveTally(view.tsl_lh, view.tsl_rh, view.tsl_text_tally) << ",\"tsl_text\":" << jsonString(view.tsl_text)
+            << ",\"tsl_lh\":" << view.tsl_lh << ",\"tsl_rh\":" << view.tsl_rh << ",\"tsl_text_tally\":" << view.tsl_text_tally
+            << ",\"viewers\":{\"webrtc\":" << view.viewers_webrtc << ",\"hls\":" << view.viewers_hls << "},\"mediamtx\":{\"ready\":" << (view.mediamtx_ready ? "true" : "false") << ",\"tracks\":[";
         for (std::size_t i = 0; i < view.mediamtx_tracks.size(); ++i)
         {
             out << (i != 0 ? "," : "") << jsonString(view.mediamtx_tracks[i]);
