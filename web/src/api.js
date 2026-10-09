@@ -94,6 +94,11 @@ export const stateKind = (state) => ({ running: "ok", no_signal: "warn", waiting
 const REASON_TEXT = { domain_not_found: "domain not found", flow_not_found: "flow not found" };
 export const reasonText = (reason) => REASON_TEXT[reason] || (reason || "").replaceAll("_", " ");
 
+/** TSL tally values (0 off, 1 red, 2 green, 3 amber) as words, their pill colour, and the CSS classes of a lamp, border or label. */
+export const TALLY = ["off", "red", "green", "amber"];
+export const TALLY_KIND = ["neutral", "bad", "ok", "warn"];
+export const tallyClass = (value) => (value ? ["tally", `tally-${TALLY[value]}`] : []);
+
 /** Input channels (1-based) of an audio pair. */
 export const pairChannels = (pair) => [(pair - 1) * 2 + 1, (pair - 1) * 2 + 2];
 

@@ -192,6 +192,7 @@ void ConfigStore::persistUnlocked()
         item["overlay_label"] = picojson::value(channel.overlay_label);
         item["overlay_source"] = picojson::value(channel.overlay_source);
         item["overlay_format"] = picojson::value(channel.overlay_format);
+        item["tally_text"] = picojson::value(channel.tally_text);
         channels.push_back(picojson::value(item));
     }
     if (!channels.empty())

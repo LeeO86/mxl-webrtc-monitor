@@ -48,6 +48,8 @@ export function selectChannel(index) {
 
 /** The configuration file is set: settings and imports can be saved (PUT/POST answer 409 otherwise). */
 export const hasConfigFile = computed(() => Boolean(live.config?.values?.MONITOR_CONFIG_FILE));
+/** The TSL tally receiver runs (TSL_ENABLE): the tiles show their lamps. */
+export const tslEnabled = computed(() => live.config?.values?.TSL_ENABLE === "true");
 /** Origin of a setting: "env", "file" or "default". */
 export const originOf = (key) => live.config?.origin?.[key] || "default";
 /** The NMOS receiver of a channel's video or audio (GET /api/v1/nmos lists them per channel, video first). */
@@ -86,6 +88,7 @@ export const CHANNEL_FIELDS = [
   "overlay_label",
   "overlay_source",
   "overlay_format",
+  "tally_text",
 ];
 export const settingsOf = (channel) => Object.fromEntries(CHANNEL_FIELDS.map((k) => [k, channel?.[k]]));
 

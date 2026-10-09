@@ -8,6 +8,7 @@
 #include "ops/httpserver.hpp"
 #include "ops/mediamtx.hpp"
 #include "ops/metrics.hpp"
+#include "tally/tsl.hpp"
 #include "util/httpclient.hpp"
 #include "util/jsonutil.hpp"
 #include "util/logging.hpp"
@@ -189,6 +190,18 @@ int main(int argc, char** argv)
             mwm::log::error("http_bind_failed", {{"port", std::to_string(cfg.web_port)}});
             return 75;
         }
+        mwm::TslListener tsl;
+        if (cfg.tsl_enable)
+        {
+            std::vector<mwm::log::Field> const ports{{"udp", std::to_string(cfg.tsl_udp_port)}, {"tcp", std::to_string(cfg.tsl_tcp_port)}};
+            if (!tsl.start(cfg, *book))
+            {
+                mwm::log::error("tsl_bind_failed", ports);
+                server.stop();
+                return 75;
+            }
+            mwm::log::info("tsl_listening", ports);
+        }
         media.start();
         try
         {
@@ -230,6 +243,7 @@ int main(int argc, char** argv)
             mwm::log::info("mxl_cleanup_skipped", {{"reason", "monitor owns no output domain"}});
         }
         nmos.stop();
+        tsl.stop();
         server.stop();
         ::alarm(0);
         return 143;

@@ -98,6 +98,23 @@ void requireKnown(std::map<std::string, std::string> const& values)
         }
     }
 }
+
+// TSL_MAP: comma-separated display:channel pairs, display 0..65535, channel 1..MONITOR_CHANNELS.
+void validateTslMap(std::string const& text, int channels)
+{
+    std::stringstream stream(text);
+    std::string item;
+    while (std::getline(stream, item, ','))
+    {
+        auto const colon = item.find(':');
+        if (colon == std::string::npos)
+        {
+            throw ConfigError("TSL_MAP entries must look like display:channel");
+        }
+        parseInt("TSL_MAP display", item.substr(0, colon), 0, 65535);
+        parseInt("TSL_MAP channel", item.substr(colon + 1), 1, channels);
+    }
+}
 } // namespace
 
 std::vector<std::string> configKeys()
@@ -107,7 +124,8 @@ std::vector<std::string> configKeys()
         "MONITOR_HLS_PUBLIC_URL", "STATE_DIR", "SHUTDOWN_TIMEOUT_S", "MXL_CLEANUP_ON_EXIT", "NMOS_LABEL", "NMOS_TAGS", "NMOS_QUERY_ADDRESS",
         "NMOS_QUERY_PORT", "MEDIAMTX_METRICS_PORT", "MEDIAMTX_RTSP_URL", "MEDIAMTX_API_URL", "MEDIAMTX_CONFIG_PATH", "MEDIAMTX_WHEP_PORT",
         "MEDIAMTX_HLS_PORT", "MEDIAMTX_ICE_UDP_PORT", "NMOS_ENABLE", "NMOS_REGISTRY_ADDRESS", "NMOS_REGISTRY_PORT", "NMOS_DNS_SD", "NMOS_PORT",
-        "NMOS_SEED", "WEB_PORT", "LOG_LEVEL", "METRICS_AUDIO_PEAK", "MONITOR_CONFIG_FILE"};
+        "NMOS_SEED", "WEB_PORT", "LOG_LEVEL", "METRICS_AUDIO_PEAK", "TSL_ENABLE", "TSL_UDP_PORT", "TSL_TCP_PORT", "TSL_SCREEN", "TSL_MAP",
+        "MONITOR_CONFIG_FILE"};
 }
 
 std::string normalizePublicBaseUrl(std::string const& key, std::string const& value)
@@ -497,7 +515,7 @@ bool isChannelKey(std::string const& key, int* index, std::string* field)
         }
         auto const rest = key.substr(underscore + 1);
         static std::vector<std::string> const fields = {"VIDEO_LABEL", "AUDIO_LABEL", "PREVIEW_HEIGHT", "VIDEO_BITRATE_KBPS", "AUDIO_BITRATE_KBPS",
-            "MAX_FPS", "AUDIO_PAIR", "DOWNMIX", "OVERLAY", "OVERLAY_LABEL", "OVERLAY_SOURCE", "OVERLAY_FORMAT"};
+            "MAX_FPS", "AUDIO_PAIR", "DOWNMIX", "OVERLAY", "OVERLAY_LABEL", "OVERLAY_SOURCE", "OVERLAY_FORMAT", "TALLY_TEXT"};
         if (std::find(fields.begin(), fields.end(), rest) == fields.end())
         {
             return false;
@@ -566,7 +584,7 @@ void applyChannelValue(ChannelSettings& channel, std::string const& field, std::
         }
         channel.downmix = mode;
     }
-    else if (field == "OVERLAY" || field == "OVERLAY_LABEL" || field == "OVERLAY_SOURCE" || field == "OVERLAY_FORMAT")
+    else if (field == "OVERLAY" || field == "OVERLAY_LABEL" || field == "OVERLAY_SOURCE" || field == "OVERLAY_FORMAT" || field == "TALLY_TEXT")
     {
         bool flag = false;
         if (!parseBool(value, &flag))
@@ -585,9 +603,13 @@ void applyChannelValue(ChannelSettings& channel, std::string const& field, std::
         {
             channel.overlay_source = flag;
         }
-        else
+        else if (field == "OVERLAY_FORMAT")
         {
             channel.overlay_format = flag;
+        }
+        else
+        {
+            channel.tally_text = flag;
         }
     }
     else
@@ -711,6 +733,15 @@ Config parseConfig(std::map<std::string, std::string> const& values, std::vector
     {
         throw ConfigError("METRICS_AUDIO_PEAK must be a boolean");
     }
+    if (!parseBool(valueOr(values, "TSL_ENABLE", "false"), &cfg.tsl_enable))
+    {
+        throw ConfigError("TSL_ENABLE must be a boolean");
+    }
+    cfg.tsl_udp_port = parseInt("TSL_UDP_PORT", valueOr(values, "TSL_UDP_PORT", "8912"), 1, 65535);
+    cfg.tsl_tcp_port = parseInt("TSL_TCP_PORT", valueOr(values, "TSL_TCP_PORT", "8913"), 1, 65535);
+    cfg.tsl_screen = parseInt("TSL_SCREEN", valueOr(values, "TSL_SCREEN", "-1"), -1, 65535);
+    cfg.tsl_map = valueOr(values, "TSL_MAP", "");
+    validateTslMap(cfg.tsl_map, cfg.monitor_channels);
     cfg.config_file = valueOr(values, "MONITOR_CONFIG_FILE", "");
 
     cfg.channels.clear();
@@ -815,6 +846,11 @@ std::map<std::string, std::string> configToMap(Config const& cfg)
     out["WEB_PORT"] = std::to_string(cfg.web_port);
     out["LOG_LEVEL"] = cfg.log_level;
     out["METRICS_AUDIO_PEAK"] = cfg.metrics_audio_peak ? "true" : "false";
+    out["TSL_ENABLE"] = cfg.tsl_enable ? "true" : "false";
+    out["TSL_UDP_PORT"] = std::to_string(cfg.tsl_udp_port);
+    out["TSL_TCP_PORT"] = std::to_string(cfg.tsl_tcp_port);
+    out["TSL_SCREEN"] = std::to_string(cfg.tsl_screen);
+    out["TSL_MAP"] = cfg.tsl_map;
     out["MONITOR_CONFIG_FILE"] = cfg.config_file;
     for (auto const& channel : cfg.channels)
     {
@@ -830,6 +866,7 @@ std::map<std::string, std::string> configToMap(Config const& cfg)
         out[channelKey(channel.index, "OVERLAY_LABEL")] = channel.overlay_label ? "true" : "false";
         out[channelKey(channel.index, "OVERLAY_SOURCE")] = channel.overlay_source ? "true" : "false";
         out[channelKey(channel.index, "OVERLAY_FORMAT")] = channel.overlay_format ? "true" : "false";
+        out[channelKey(channel.index, "TALLY_TEXT")] = channel.tally_text ? "true" : "false";
     }
     return out;
 }
@@ -883,6 +920,7 @@ std::string configToJson(Config const& cfg, std::map<std::string, ValueOrigin> c
         item["overlay_label"] = picojson::value(channel.overlay_label);
         item["overlay_source"] = picojson::value(channel.overlay_source);
         item["overlay_format"] = picojson::value(channel.overlay_format);
+        item["tally_text"] = picojson::value(channel.tally_text);
         channels.push_back(picojson::value(item));
     }
     root["channels"] = picojson::value(channels);

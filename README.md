@@ -19,8 +19,10 @@ Every listening port is an environment variable. Two monitors on one host need d
 | 8189 | `MEDIAMTX_ICE_UDP_PORT` | ICE, one UDP port and a TCP fallback on the same port |
 | 9997 | `MEDIAMTX_API_URL` | MediaMTX API, localhost only |
 | 9998 | `MEDIAMTX_METRICS_PORT` | MediaMTX metrics. Default is the API port + 1 |
+| 8912/udp | `TSL_UDP_PORT` | TSL UMD 5.0 tally, only with `TSL_ENABLE=true` |
+| 8913/tcp | `TSL_TCP_PORT` | TSL UMD 5.0 tally (DLE/STX framing), only with `TSL_ENABLE=true` |
 
-These defaults do not collide with mxl-decklink (8080, 3212), mxl-st2110-gateway (8090), mxl-fabrics-agent (8095, 3232) or FlowXer (9620). If `WEB_PORT` or `NMOS_PORT` cannot be bound, the process exits 75. MediaMTX binds its own ports; until its API answers, `/readyz` stays 503.
+These defaults do not collide with mxl-decklink (8080, 3212), mxl-st2110-gateway (8090), mxl-fabrics-agent (8095, 3232), mxl-multiviewer (8110, 3262, TSL 8910 and 8911) or FlowXer (9620). The TSL defaults are not the multiviewer's 8910/8911 because both repos run with host networking, so a monitor and a multiviewer on one host would otherwise fight over the same ports. If `WEB_PORT`, `NMOS_PORT` or, with `TSL_ENABLE=true`, a TSL port cannot be bound, the process exits 75. MediaMTX binds its own ports; until its API answers, `/readyz` stays 503.
 
 ## Settings
 
@@ -65,10 +67,15 @@ Environment, then `MONITOR_CONFIG_FILE`, then the defaults below. Unknown enviro
 | `LOG_LEVEL` | `info` | |
 | `MONITOR_CONFIG_FILE` | empty | optional JSON file under the environment |
 | `METRICS_AUDIO_PEAK` | false | publish per-channel peak gauges |
+| `TSL_ENABLE` | false | listen for TSL UMD 5.0 tally |
+| `TSL_UDP_PORT` | 8912 | tally over UDP |
+| `TSL_TCP_PORT` | 8913 | tally over TCP |
+| `TSL_SCREEN` | -1 | only this TSL screen; -1 is every screen |
+| `TSL_MAP` | empty | `display:channel` pairs, e.g. `0:1,1:2`; empty: display `i` is channel `i+1` |
 
 `MONITOR_PUBLIC_IP` stays the ICE address. `NMOS_HOST_ADDRESS` is the NMOS address and defaults to it. Playback URLs use `MONITOR_PUBLIC_IP` unless the public WHEP or HLS origin is set. `MXL_OUTPUT_DOMAIN_DIR` and `MXL_OUTPUT_DOMAIN_ID` are ignored: this process only reads domains.
 
-Channel keys are `CH<n>_VIDEO_LABEL`, `_AUDIO_LABEL`, `_PREVIEW_HEIGHT`, `_VIDEO_BITRATE_KBPS`, `_AUDIO_BITRATE_KBPS`, `_MAX_FPS`, `_AUDIO_PAIR`, `_DOWNMIX`, `_OVERLAY`, `_OVERLAY_LABEL`, `_OVERLAY_SOURCE`, `_OVERLAY_FORMAT`.
+Channel keys are `CH<n>_VIDEO_LABEL`, `_AUDIO_LABEL`, `_PREVIEW_HEIGHT`, `_VIDEO_BITRATE_KBPS`, `_AUDIO_BITRATE_KBPS`, `_MAX_FPS`, `_AUDIO_PAIR`, `_DOWNMIX`, `_OVERLAY`, `_OVERLAY_LABEL`, `_OVERLAY_SOURCE`, `_OVERLAY_FORMAT`, `_TALLY_TEXT`.
 
 ## HTTP API
 
@@ -83,7 +90,7 @@ Channel keys are `CH<n>_VIDEO_LABEL`, `_AUDIO_LABEL`, `_PREVIEW_HEIGHT`, `_VIDEO
 | GET | `/api/v1/config/export` |
 | POST | `/api/v1/config/import` |
 
-`GET /api/v1/info` has the version, `label` (the node label), the MXL, nmos-cpp, GStreamer and MediaMTX versions and the available encoders. Each channel in `GET /api/v1/channels` (and on the WebSocket) has its settings, both IS-05 legs (`state`, `reason`, `master_enable`, domain, flow, sender), format, encoder, viewers, `mediamtx` (`ready` and `tracks` of its MediaMTX path), playback URLs and meters (peak and RMS per input channel). `PATCH /api/v1/channels/{n}` takes the channel settings (`video_label`, `audio_label`, `preview_height`, `video_bitrate_kbps`, `audio_bitrate_kbps`, `max_fps`, `audio_pair`, `downmix`, `overlay`, `overlay_label`, `overlay_source`, `overlay_format`). `PUT /api/v1/config` replaces the configuration file with the given keys. A rejected change leaves the settings as they were.
+`GET /api/v1/info` has the version, `label` (the node label), the MXL, nmos-cpp, GStreamer and MediaMTX versions and the available encoders. Each channel in `GET /api/v1/channels` (and on the WebSocket) has its settings, both IS-05 legs (`state`, `reason`, `master_enable`, domain, flow, sender), format, encoder, viewers, `mediamtx` (`ready` and `tracks` of its MediaMTX path), playback URLs, meters (peak and RMS per input channel) and the TSL tally: `tsl_lh`, `tsl_rh`, `tsl_text_tally` (0 off, 1 red, 2 green, 3 amber), `tally` (the border colour) and `tsl_text` (the label). `PATCH /api/v1/channels/{n}` takes the channel settings (`video_label`, `audio_label`, `preview_height`, `video_bitrate_kbps`, `audio_bitrate_kbps`, `max_fps`, `audio_pair`, `downmix`, `overlay`, `overlay_label`, `overlay_source`, `overlay_format`, `tally_text`). `PUT /api/v1/config` replaces the configuration file with the given keys. A rejected change leaves the settings as they were.
 
 `/readyz` is 200 only when the MXL root is a directory, MediaMTX answers, and, when `NMOS_REGISTRY_ADDRESS` is set, the Query API returns this node. Export is one JSON document with `version`, `settings` and `secrets_included: false`. Import restores settings and channels into `MONITOR_CONFIG_FILE` and skips keys set by the environment. There is nothing secret to omit.
 
@@ -91,13 +98,27 @@ Channel keys are `CH<n>_VIDEO_LABEL`, `_AUDIO_LABEL`, `_PREVIEW_HEIGHT`, `_VIDEO
 
 `http://<node>:<WEB_PORT>/` uses only this API. The tabs keep their place in the URL (`#channels`); the page follows the browser's light or dark theme.
 
-- **Multiview**: every channel's player in a grid (automatic or 1×1 to 4×4); a click shows one channel full size. Each tile shows the state, source, format, audio, encoder, viewers, whether WebRTC or HLS plays, and the audio meters with the monitored pair outlined. Audio is muted until you unmute a tile.
-- **Channels**: one channel's settings (labels, preview size, frame rate, bitrates, audio pair, downmix, overlay), applied at once; its IS-05 routes and its stream (MediaMTX path, WHEP and HLS URLs).
+- **Multiview**: every channel's player in a grid (automatic or 1×1 to 4×4); a click shows one channel full size. Each tile shows the state, source, format, audio, encoder, viewers, whether WebRTC or HLS plays, and the audio meters with the monitored pair outlined. Audio is muted until you unmute a tile. With TSL on, the tile shows the tally (see below).
+- **Channels**: one channel's settings (labels, preview size, frame rate, bitrates, audio pair, downmix, overlay, text tally), applied at once; its IS-05 routes, its stream (MediaMTX path, WHEP and HLS URLs) and its tally fields.
 - **NMOS**: node, registration and every receiver's active IS-05 parameters. There is no source picker: routing is IS-05 only.
 - **Status**: health probes, versions, MediaMTX, and per channel the counters of `/metrics`.
 - **Settings**: every setting with its origin (ENV, FILE, DEFAULT), editing of the non-environment settings into `MONITOR_CONFIG_FILE`, export and import.
 
 Edits stay in the page until they are applied, also across tab switches and reconnects.
+
+## Tally (TSL)
+
+The receiver is the one of mxl-multiviewer: TSL UMD 5.0 on `TSL_UDP_PORT` and `TSL_TCP_PORT` (TCP with DLE/STX framing; DLE/ETX is accepted, not required). Set `TSL_ENABLE=true`. With an empty `TSL_MAP`, display index `i` is channel `i+1` (0-based, as the multiviewer); `TSL_SCREEN` (-1: every screen) picks one screen. UTF-16 labels are read as UTF-16. The tally shows in the page; it is not burned into the stream.
+
+| TSL field | In the page |
+| --- | --- |
+| LH | left lamp at the start of the tile's title |
+| RH | right lamp at the end of the tile's title |
+| text tally | the label's background, when the channel's `tally_text` is on (black text) |
+| border | text tally, else RH, else LH, around the picture |
+| text | `tsl_text` in the API and on the Channels tab |
+
+An off lamp is not drawn. `tally_text` is off by default; set it per channel on the Channels tab or with `CH<n>_TALLY_TEXT=true`.
 
 ## Exit codes
 
@@ -112,7 +133,7 @@ Shutdown stops the media threads and releases MXL readers, erases the node from 
 
 ## Platform
 
-The monitor uses the host network because browsers send ICE to `MONITOR_PUBLIC_IP` (the node IP). Set `NMOS_HOST_ADDRESS` to that same IP. Set `NMOS_SEED` to `<production>-<function>`, `NMOS_LABEL`, and `NMOS_TAGS` for the production and function. Point `NMOS_REGISTRY_ADDRESS` at the platform registry and leave DNS-SD off. Query defaults to the registration port plus one. Set `MONITOR_WHEP_PUBLIC_URL` and `MONITOR_HLS_PUBLIC_URL` to the ingress origins. Mount `/Volumes/mxl` read-only and a writable `/config` at `STATE_DIR`. `terminationGracePeriodSeconds` must be greater than `SHUTDOWN_TIMEOUT_S`. The process runs as uid 1000 and does not need extra capabilities or `hostIPC`. It does not create an MXL domain. `deploy/mxl-webrtc-monitor.yaml` is an example.
+The monitor uses the host network because browsers send ICE to `MONITOR_PUBLIC_IP` (the node IP). Set `NMOS_HOST_ADDRESS` to that same IP. Set `NMOS_SEED` to `<production>-<function>`, `NMOS_LABEL`, and `NMOS_TAGS` for the production and function. Point `NMOS_REGISTRY_ADDRESS` at the platform registry and leave DNS-SD off. Query defaults to the registration port plus one. Set `MONITOR_WHEP_PUBLIC_URL` and `MONITOR_HLS_PUBLIC_URL` to the ingress origins. Mount `/Volumes/mxl` read-only and a writable `/config` at `STATE_DIR`. `terminationGracePeriodSeconds` must be greater than `SHUTDOWN_TIMEOUT_S`. For tally, set `TSL_ENABLE=true` and give `TSL_UDP_PORT` and `TSL_TCP_PORT` per instance like the other ports (a UDP and a TCP port may have the same number). The process runs as uid 1000 and does not need extra capabilities or `hostIPC`. It does not create an MXL domain. `deploy/mxl-webrtc-monitor.yaml` is an example.
 
 WebRTC needs UDP from the browser to the ICE port. If UDP is blocked, the page falls back to HLS, which is ordinary HTTP.
 

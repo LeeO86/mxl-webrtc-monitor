@@ -52,6 +52,11 @@ struct ChannelView
     std::string source_label;
     std::uint64_t latency_count = 0;
     double latency_sum = 0;
+    // TSL tally as received: 0 off, 1 red, 2 green, 3 amber, and the display's text.
+    int tsl_lh = 0;
+    int tsl_rh = 0;
+    int tsl_text_tally = 0;
+    std::string tsl_text;
 };
 
 class ChannelBook
@@ -70,6 +75,7 @@ public:
     void setSourceLabel(int channel, std::string const& label);
     void setViewers(int channel, int webrtc, int hls);
     void setMediamtxPath(int channel, bool ready, std::vector<std::string> tracks);
+    void setTally(int channel, int lh, int rh, int text, std::string const& label);
     void observeLatency(int channel, double seconds);
 
     std::vector<ChannelView> snapshot() const;

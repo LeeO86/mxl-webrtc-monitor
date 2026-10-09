@@ -1,11 +1,14 @@
 <script setup>
 // One channel in the multiview: its player (WHEP, HLS fallback), state, source, audio meters with
 // the monitored pair, mute, and the stream's viewers. A click on the picture shows it full size.
+// TSL tally: the left lamp shows LH, the right lamp RH, the picture's border the text tally, else RH,
+// else LH; with tally_text the label sits on the text tally colour.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import Meters from "./Meters.vue";
 import Pill from "./Pill.vue";
-import { STATE_TEXT, pairChannels, reasonText, stateKind } from "../api.js";
+import { STATE_TEXT, TALLY, pairChannels, reasonText, stateKind, tallyClass } from "../api.js";
 import { createPlayer, playbackKey } from "../player.js";
+import { tslEnabled } from "../store.js";
 
 const props = defineProps({
   channel: { type: Object, required: true },
@@ -57,17 +60,23 @@ const audioText = computed(() => {
   const pair = pairChannels(c.value.audio_pair);
   return `audio ${STATE_TEXT[a.state]} · ${c.value.audio_channels} ch · pair ${pair.join("/")}${c.value.downmix === "mono" ? " mono" : ""}`;
 });
+const tallyTitle = computed(() => {
+  const ch = c.value;
+  return `TSL: left ${TALLY[ch.tsl_lh]}, text ${TALLY[ch.tsl_text_tally]}, right ${TALLY[ch.tsl_rh]}${ch.tsl_text ? ` · ${ch.tsl_text}` : ""}`;
+});
 </script>
 
 <template>
   <div class="panel tile" :class="{ expanded }">
     <h3>
+      <span v-if="tslEnabled" class="lamp" :class="tallyClass(c.tsl_lh)" :title="tallyTitle"></span>
       <span class="idx">{{ c.index }}</span>
-      <span class="name" :title="`Channel ${c.index}: ${c.video_label} / ${c.audio_label}`">{{ c.video_label }}</span>
+      <span class="name" :class="c.tally_text && tallyClass(c.tsl_text_tally)" :title="`Channel ${c.index}: ${c.video_label} / ${c.audio_label}`">{{ c.video_label }}</span>
       <span class="spacer"></span>
       <span class="state-tag" :class="c.video.state">{{ STATE_TEXT[c.video.state] || c.video.state }}</span>
+      <span v-if="tslEnabled" class="lamp" :class="tallyClass(c.tsl_rh)" :title="tallyTitle"></span>
     </h3>
-    <div class="picture" :title="expanded ? 'Back to the grid' : 'Full size'" @click="$emit('toggle')">
+    <div class="picture" :class="tallyClass(c.tally)" :title="expanded ? 'Back to the grid' : 'Full size'" @click="$emit('toggle')">
       <video ref="video" autoplay playsinline muted></video>
       <span v-if="mode === 'blocked'" class="ov bl hint">Playback blocked on https: set MONITOR_WHEP_PUBLIC_URL and MONITOR_HLS_PUBLIC_URL.</span>
     </div>

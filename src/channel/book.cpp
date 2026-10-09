@@ -71,6 +71,10 @@ void ChannelBook::reset(Config const& cfg)
                 view.latency_count = previous.latency_count;
                 view.latency_sum = previous.latency_sum;
                 view.encode_latency_seconds = previous.encode_latency_seconds;
+                view.tsl_lh = previous.tsl_lh;
+                view.tsl_rh = previous.tsl_rh;
+                view.tsl_text_tally = previous.tsl_text_tally;
+                view.tsl_text = previous.tsl_text;
             }
         }
         next.push_back(std::move(view));
@@ -225,6 +229,18 @@ void ChannelBook::setMediamtxPath(int channel, bool ready, std::vector<std::stri
     {
         view->mediamtx_ready = ready;
         view->mediamtx_tracks = std::move(tracks);
+    }
+}
+
+void ChannelBook::setTally(int channel, int lh, int rh, int text, std::string const& label)
+{
+    std::lock_guard const lock{mu_};
+    if (auto* view = find(channel))
+    {
+        view->tsl_lh = lh;
+        view->tsl_rh = rh;
+        view->tsl_text_tally = text;
+        view->tsl_text = label;
     }
 }
 

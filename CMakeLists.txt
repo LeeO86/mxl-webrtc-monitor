@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(mxl-webrtc-monitor VERSION 1.1.0 LANGUAGES CXX)
+project(mxl-webrtc-monitor VERSION 1.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -31,6 +31,7 @@ add_library(mwm-core STATIC
     src/ops/mediamtx.cpp
     src/ops/api.cpp
     src/media/v210.cpp
+    src/tally/tsl.cpp
 )
 target_include_directories(mwm-core PUBLIC src third_party)
 target_link_libraries(mwm-core PUBLIC Threads::Threads)
@@ -49,6 +50,7 @@ if(MWM_BUILD_TESTS)
         tests/unit/test_playback.cpp
         tests/unit/test_platform.cpp
         tests/unit/test_v210.cpp
+        tests/unit/test_tally.cpp
     )
     target_include_directories(unit-tests PRIVATE src third_party)
     target_link_libraries(unit-tests PRIVATE mwm-core)

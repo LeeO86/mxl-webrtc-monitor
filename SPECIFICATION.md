@@ -294,10 +294,43 @@ Additions for the UI (1.1.0): `label` (node label) in `/api/v1/info`; `overlay_l
 `overlay_source`, `overlay_format` and `mediamtx` (`ready`, `tracks` of the channel's MediaMTX
 path) in each channel of `/api/v1/channels` and the events.
 
+Additions for tally (1.2.0, §6.5): `tally`, `tsl_text`, `tsl_lh`, `tsl_rh`, `tsl_text_tally` and the
+setting `tally_text` in each channel of `/api/v1/channels` and the events; `PATCH` takes `tally_text`.
+
 ### 6.4 Ops endpoints
 
 `/livez`, `/readyz` (ready = MXL root mounted, NMOS registered or disabled,
 mediamtx reachable), `/statusz`, `/metrics` — on `WEB_PORT`.
+
+### 6.5 Tally (TSL UMD 5.0)
+
+The receiver is mxl-multiviewer's (its SPECIFICATION §7, release 1.3.0), without TSL 3.1.
+
+- `TSL_ENABLE=true` listens on `TSL_UDP_PORT` (default 8912) and `TSL_TCP_PORT` (default 8913).
+  It is off by default. A port that cannot be bound exits 75.
+- Packet (little-endian): `PBC` (the number of bytes after `PBC`), `VER` 0, `FLAGS` (bit 0: text is
+  UTF-16LE, else ASCII; bit 1: screen control data, which carries no displays and is ignored),
+  `SCREEN`, then display messages `INDEX`, `CONTROL`, `LENGTH`, `TEXT`. `CONTROL` bits 0–1 are RH,
+  2–3 the text tally, 4–5 LH, 6–7 brightness (not used). Bit 15 marks control data; that message is
+  skipped. Tally values: 0 off, 1 red, 2 green, 3 amber. UTF-16 text (surrogate pairs included) is
+  converted to UTF-8; a lone surrogate, and an ASCII byte above 0x7F, becomes U+FFFD. A packet that
+  is shorter than its `PBC` or ends inside a message is dropped as a whole.
+- TCP uses DLE/STX framing (DLE 0xFE, STX 0x02; a 0xFE byte in the packet is sent as DLE DLE).
+  DLE/ETX (0x03) after the packet is accepted, not required: a packet also ends when it holds
+  `PBC` + 2 bytes, or when the next DLE/STX starts. Up to 8 TCP clients. A UDP datagram is one bare
+  packet or a packet in the same framing.
+- Display index to channel: `TSL_MAP` (`display:channel` pairs, e.g. `0:1,1:2`). Empty means
+  display `i` is channel `i+1` (the index is 0-based, as in the multiviewer). `TSL_SCREEN` (default
+  −1: every screen) accepts only that screen. A display without a channel is ignored.
+- Each channel in `GET /api/v1/channels` and the events carries `tsl_lh`, `tsl_rh` and
+  `tsl_text_tally` as received, `tally` (the border colour: the text tally, else RH, else LH) and
+  `tsl_text` (UTF-8). They keep the last message for that display and are not saved.
+- Web UI: while `TSL_ENABLE` is true, each tile has a left lamp (LH) and a right lamp (RH) at the
+  ends of its title; an off lamp is not drawn. The picture gets a border in the `tally` colour. The
+  channel setting `tally_text` (`CH<n>_TALLY_TEXT`, default false, applies at once) puts the
+  channel label on the text tally colour, with black text, while that is not off. The Channels tab
+  lists the fields. The tally is shown in the page only, not burned into the stream.
+- The `TSL_*` keys are global settings: changed in the UI, they apply after a restart.
 
 ---
 
@@ -347,11 +380,16 @@ that the environment owns. It returns 409 when `MONITOR_CONFIG_FILE` is unset.
 | `NMOS_SEED` | `HOST_ID-monitor` | UUIDv5 seed for the node, device and receivers |
 | `WEB_PORT` | 8100 | UI, REST, health, metrics |
 | `LOG_LEVEL` | `info` | JSON logs |
+| `TSL_ENABLE` | false | TSL UMD 5.0 tally receiver (§6.5) |
+| `TSL_UDP_PORT` / `TSL_TCP_PORT` | 8912 / 8913 | tally over UDP and TCP |
+| `TSL_SCREEN` | −1 | only this screen; −1 every screen |
+| `TSL_MAP` | empty | `display:channel` pairs; empty: display `i` is channel `i+1` |
 
 Defaults do not collide, under host networking, with mxl-decklink (8080, 3212/3213),
-mxl-st2110-gateway (8090), mxl-fabrics-agent (8095, 3232/3233, 23500–23599) and
-FlowXer (9620). Running two monitors on one host requires different ports for
-both containers; the README documents this.
+mxl-st2110-gateway (8090), mxl-fabrics-agent (8095, 3232/3233, 23500–23599),
+mxl-multiviewer (8110, 3262/3263, TSL 8910/8911) and FlowXer (9620). Running two
+monitors on one host requires different ports for both containers; the README
+documents this.
 
 ### 7.1 Behind an HTTPS reverse proxy
 
@@ -432,7 +470,12 @@ scraped separately.
 
 - Unit: config precedence, IS-05 parameter validation, deterministic IDs, channel
   state machine (not routed → waiting → no signal → running → waiting), domain
-  resolution including mirror domains, audio pair selection.
+  resolution including mirror domains, audio pair selection, TSL 5.0 parsing against
+  byte vectors of the platform's reference codec (UTF-16 and ASCII, several displays,
+  DLE stuffing, with and without DLE/ETX), display mapping and screen filter, the
+  tally colour rule, and the tally fields of the API.
+- Integration also sends a TSL 5.0 packet over UDP and one over TCP and checks the
+  tally fields of channel 1.
 - Integration (CI, no GPU): a test writer creates a v210 + float32 flow in a temp
   MXL root; a minimal registry stand-in (or nmos-cpp registry container); the test
   PATCHes channel 1, waits for state `running`, then fetches the HLS playlist from

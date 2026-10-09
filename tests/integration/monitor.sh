@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Integration: route a v210 + float32 flow, check HLS, no_signal, then waiting→running.
+# Integration: route a v210 + float32 flow, check HLS, TSL tally over UDP and TCP, no_signal, then waiting→running.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -21,6 +21,8 @@ API_PORT="${API_PORT:-19997}"
 HLS_PORT="${HLS_PORT:-18888}"
 WHEP_PORT="${WHEP_PORT:-18889}"
 ICE_PORT="${ICE_PORT:-18189}"
+TSL_UDP_PORT="${TSL_UDP_PORT:-18912}"
+TSL_TCP_PORT="${TSL_TCP_PORT:-18913}"
 PIDS=()
 
 cleanup() {
@@ -78,6 +80,8 @@ export READ_OFFSET_GRAINS=1
 export STATE_DIR="$WORKDIR/state"
 export SHUTDOWN_TIMEOUT_S=10
 export MXL_CLEANUP_ON_EXIT=true
+export TSL_ENABLE=true
+export TSL_UDP_PORT TSL_TCP_PORT
 
 mkdir -p "$WORKDIR/mxl/decoy-other"
 printf '%s\n' '{"id":"11111111-1111-4111-8111-111111111111"}' >"$WORKDIR/mxl/decoy-other/domain_def.json"
@@ -210,6 +214,39 @@ if [[ "$mtx" != "ok" ]]; then
   exit 1
 fi
 echo "mediamtx path ready"
+
+# TSL 5.0, bytes from the platform's reference codec (tsl5.py). Display 0 is channel 1.
+send_tsl() {
+  python3 - "$@" <<'PY'
+import socket, sys
+proto, port, data = sys.argv[1], int(sys.argv[2]), bytes.fromhex(sys.argv[3])
+if proto == "udp":
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(data, ("127.0.0.1", port))
+else:
+    with socket.create_connection(("127.0.0.1", port)) as conn:
+        conn.sendall(data)
+PY
+}
+# [tsl_lh, tsl_rh, tsl_text_tally, tally, tsl_text] of channel 1.
+wait_tally() {
+  local want="$1" got=""
+  for _ in $(seq 1 20); do
+    got="$(curl -sf "http://127.0.0.1:${WEB_PORT}/api/v1/channels" | PYTHONIOENCODING=utf-8 python3 -c 'import json,sys; c=json.load(sys.stdin)["channels"][0]; print(json.dumps([c["tsl_lh"], c["tsl_rh"], c["tsl_text_tally"], c["tally"], c["tsl_text"]], ensure_ascii=False))')"
+    if [[ "$got" == "$want" ]]; then
+      echo "tally $got"
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "tally: wanted $want, got $got" >&2
+  return 1
+}
+# UDP, screen 0, UTF-16: LH red, text amber, RH green, "Kamera Zürich".
+send_tsl udp "$TSL_UDP_PORT" 2400000100000000de001a004b0061006d0065007200610020005a00fc007200690063006800
+wait_tally '[1, 2, 3, 3, "Kamera Zürich"]'
+# TCP, DLE/STX ... DLE/ETX with a stuffed 0xFE: RH red, "þ CAM"; display 5 has no channel here.
+send_tsl tcp "$TSL_TCP_PORT" fe022800000100000000c1000a00fefe002000430041004d000500ea000e00690067006e006f00720065006400fe03
+wait_tally '[0, 1, 0, 1, "þ CAM"]'
 
 # Stop the writer and expect no_signal.
 kill "${PIDS[1]}" 2>/dev/null || true
