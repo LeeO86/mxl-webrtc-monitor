@@ -25,25 +25,103 @@ bool mxlRootMounted(std::string const& path)
     return std::filesystem::is_directory(path, ec);
 }
 
-std::string playbackJson(Config const& cfg, int index)
+// <base>/<prefix>/ch<n>/whep and .../index.m3u8; the default bases are the own MediaMTX on MONITOR_PUBLIC_IP.
+std::string playbackJson(Config const& cfg, std::string const& path)
 {
-    auto const suffix = "/ch" + std::to_string(index);
-    bool const whepPublic = !cfg.monitor_whep_public_url.empty();
-    bool const hlsPublic = !cfg.monitor_hls_public_url.empty();
-    auto const whep = whepPublic ? cfg.monitor_whep_public_url + suffix + "/whep"
+    auto const suffix = "/" + path;
+    bool const whepPublic = !cfg.preview_whep_url.empty();
+    bool const hlsPublic = !cfg.preview_hls_url.empty();
+    auto const whep = whepPublic ? cfg.preview_whep_url + suffix + "/whep"
                                  : "http://" + cfg.monitor_public_ip + ":" + std::to_string(cfg.mediamtx_whep_port) + suffix + "/whep";
-    auto const hls = hlsPublic ? cfg.monitor_hls_public_url + suffix + "/index.m3u8"
+    auto const hls = hlsPublic ? cfg.preview_hls_url + suffix + "/index.m3u8"
                                : "http://" + cfg.monitor_public_ip + ":" + std::to_string(cfg.mediamtx_hls_port) + suffix + "/index.m3u8";
     std::ostringstream out;
     out << "\"playback\":{\"whep\":" << jsonString(whep) << ",\"hls\":" << jsonString(hls) << ",\"public\":{\"whep\":" << (whepPublic ? "true" : "false")
         << ",\"hls\":" << (hlsPublic ? "true" : "false") << "}}";
     return out.str();
 }
+
+// Query string to values; '+' and %XX are decoded.
+std::map<std::string, std::string> queryValues(std::string const& query)
+{
+    auto decode = [](std::string const& text) {
+        std::string out;
+        for (std::size_t i = 0; i < text.size(); ++i)
+        {
+            if (text[i] == '+')
+            {
+                out += ' ';
+            }
+            else if (text[i] == '%' && i + 2 < text.size() && std::isxdigit(static_cast<unsigned char>(text[i + 1])) &&
+                     std::isxdigit(static_cast<unsigned char>(text[i + 2])))
+            {
+                out += static_cast<char>(std::stoi(text.substr(i + 1, 2), nullptr, 16));
+                i += 2;
+            }
+            else
+            {
+                out += text[i];
+            }
+        }
+        return out;
+    };
+    std::map<std::string, std::string> values;
+    std::stringstream stream(query);
+    std::string item;
+    while (std::getline(stream, item, '&'))
+    {
+        if (item.empty())
+        {
+            continue;
+        }
+        auto const eq = item.find('=');
+        values[decode(item.substr(0, eq))] = eq == std::string::npos ? std::string{} : decode(item.substr(eq + 1));
+    }
+    return values;
+}
+
+// GET /widgets: the operator-screen widgets of this function and their parameters (JSON schema).
+std::string widgetsJson(Config const& cfg)
+{
+    std::ostringstream out;
+    out << R"([{"id":"channel","title":"Monitor channel","params":{"type":"object","properties":{"ch":{"type":"integer","minimum":1,"maximum":)"
+        << cfg.monitor_channels
+        << R"(,"title":"Channel"},"labels":{"type":"boolean","default":true,"title":"Label and tally lamps"},)"
+        << R"("meters":{"type":"boolean","default":true,"title":"Audio meters"}},"required":["ch"]},"min_size":{"w":320,"h":200},"version":)"
+        << jsonString(kVersion) << "}]";
+    return out.str();
+}
+
+// The parameters of /widget/channel: ch 1..MONITOR_CHANNELS, labels and meters booleans, theme. Empty when valid.
+std::string channelWidgetError(Config const& cfg, std::map<std::string, std::string> const& params)
+{
+    auto const ch = params.find("ch");
+    if (ch == params.end() || ch->second.empty() || ch->second.size() > 2 || ch->second.find_first_not_of("0123456789") != std::string::npos ||
+        std::stoi(ch->second) < 1 || std::stoi(ch->second) > cfg.monitor_channels)
+    {
+        return "ch must be a channel 1.." + std::to_string(cfg.monitor_channels);
+    }
+    for (char const* key : {"labels", "meters"})
+    {
+        auto const it = params.find(key);
+        if (it != params.end() && it->second != "true" && it->second != "false" && it->second != "1" && it->second != "0")
+        {
+            return std::string(key) + " must be true or false";
+        }
+    }
+    auto const theme = params.find("theme");
+    if (theme != params.end() && theme->second != "dark" && theme->second != "light" && theme->second != "transparent")
+    {
+        return "theme must be dark, light or transparent";
+    }
+    return {};
+}
 } // namespace
 
 Api::Api(std::shared_ptr<ConfigStore> store, std::shared_ptr<ChannelBook> book)
     : store_(std::move(store))
     , book_(std::move(book))
+    , startup_(store_->get())
 {
     info_.version = kVersion;
     info_.nmos_cpp = kNmosPin;
@@ -84,6 +162,36 @@ void Api::setMediamtxVersion(std::function<std::string()> probe)
 void Api::setNmosSummary(std::function<std::string()> summary)
 {
     nmosSummary_ = std::move(summary);
+}
+
+void Api::setMediamtxProcess(std::function<ProcessState()> probe)
+{
+    mediamtxProcess_ = std::move(probe);
+}
+
+std::string Api::statusJson() const
+{
+    auto const cfg = store_->get();
+    std::ostringstream out;
+    out << "{\"version\":" << jsonString(kVersion) << ",\"channels\":" << cfg.monitor_channels
+        << ",\"restart_required\":" << (store_->restartRequired() ? "true" : "false") << ",\"preview\":{\"mode\":"
+        << jsonString(startup_.previewShared() ? "shared" : "own") << ",\"publish_url\":" << jsonString(startup_.publishUrl())
+        << ",\"path_prefix\":" << jsonString(startup_.preview_path_prefix);
+    if (mediamtxProcess_)
+    {
+        auto const process = mediamtxProcess_();
+        out << ",\"mediamtx\":{\"running\":" << (process.running ? "true" : "false") << ",\"restarts\":" << process.restarts << "}";
+    }
+    out << ",\"streams\":[";
+    bool first = true;
+    for (auto const& view : book_->snapshot())
+    {
+        out << (first ? "" : ",") << "{\"channel\":" << view.settings.index << ",\"path\":" << jsonString(view.preview_path)
+            << ",\"state\":" << jsonString(view.publish_state) << ",\"error\":" << jsonString(view.publish_error) << "}";
+        first = false;
+    }
+    out << "]}}";
+    return out.str();
 }
 
 std::string Api::infoJson() const
@@ -138,7 +246,8 @@ std::string Api::channelsJson() const
         {
             out << (i != 0 ? "," : "") << jsonString(view.mediamtx_tracks[i]);
         }
-        out << "]}," << playbackJson(cfg, view.settings.index) << ",\"meters\":{\"peak_dbfs\":[";
+        out << "]},\"preview\":{\"path\":" << jsonString(view.preview_path) << ",\"state\":" << jsonString(view.publish_state)
+            << ",\"error\":" << jsonString(view.publish_error) << "}," << playbackJson(cfg, view.preview_path) << ",\"meters\":{\"peak_dbfs\":[";
         for (std::size_t i = 0; i < view.peak_dbfs.size(); ++i)
         {
             if (i != 0)
@@ -195,9 +304,29 @@ HttpResponse Api::handle(HttpRequest const& request)
     }
     if (request.method == "GET" && request.path == "/statusz")
     {
+        return {200, "application/json", statusJson()};
+    }
+    if (request.method == "GET" && request.path == "/widgets")
+    {
+        return {200, "application/json", widgetsJson(cfg)};
+    }
+    if (request.method == "GET" && request.path.rfind("/widget/", 0) == 0)
+    {
+        if (request.path != "/widget/channel")
+        {
+            return {404, "application/json", "{\"error\":\"widget not found\"}"};
+        }
+        auto const error = channelWidgetError(cfg, queryValues(request.query));
+        if (!error.empty())
+        {
+            return {400, "application/json", std::string("{\"error\":") + jsonString(error) + "}"};
+        }
+        // The page reads its parameters and picks the widget from the URL. Only these routes may be
+        // framed, by WIDGET_FRAME_ANCESTORS.
         HttpResponse response;
-        response.body = std::string("{\"version\":") + jsonString(kVersion) + ",\"channels\":" + std::to_string(cfg.monitor_channels) + ",\"restart_required\":" +
-                        (store_->restartRequired() ? "true" : "false") + "}";
+        response.contentType = "text/html; charset=utf-8";
+        response.body = indexPage_.empty() ? std::string("<!doctype html><title>mxl-webrtc-monitor</title><p>UI was not embedded.</p>") : indexPage_;
+        response.headers.emplace_back("Content-Security-Policy", "frame-ancestors " + cfg.widget_frame_ancestors);
         return response;
     }
     if (request.method == "GET" && request.path == "/metrics")

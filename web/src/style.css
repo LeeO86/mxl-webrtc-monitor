@@ -13,8 +13,9 @@
   --chip: #233041;
   font-size: 15px;
 }
+/* A widget's theme=dark|light|transparent (data-theme) overrides the browser's; transparent keeps the dark colours. */
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme]) {
     --bg: #f3f5f8;
     --panel: #ffffff;
     --panel2: #eef1f5;
@@ -28,6 +29,22 @@
     --chip: #e6ebf1;
   }
 }
+:root[data-theme="light"] {
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --panel2: #eef1f5;
+  --border: #d4dbe3;
+  --text: #1b2430;
+  --muted: #5d6b7a;
+  --accent: #1f6fd1;
+  --ok: #1f8f47;
+  --warn: #a86d00;
+  --bad: #c23b2f;
+  --chip: #e6ebf1;
+  color-scheme: light;
+}
+:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-theme="transparent"] { --bg: transparent; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 header { display: flex; align-items: center; gap: .4rem 1rem; padding: .7rem 1.2rem; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
@@ -164,6 +181,12 @@ a { color: var(--accent); }
 .tile h3 .name { text-transform: none; letter-spacing: 0; color: var(--text); font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tile .picture { cursor: zoom-in; }
 .tile.expanded .picture { cursor: zoom-out; }
+/* Widget (/widget/channel): the tile fills its frame */
+.widget-root { height: 100vh; }
+.widget-root > .empty { padding: .6rem; }
+.tile.widget { display: flex; flex-direction: column; height: 100%; padding: .4rem; background: var(--bg); border: 0; border-radius: 0; }
+.tile.widget .picture { flex: 1; min-height: 0; aspect-ratio: auto; cursor: default; }
+.tile.widget > .meters { flex: none; height: 24px; margin-top: .4rem; }
 .srcline { font-size: .8rem; margin: .5rem 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .statusline { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .9rem; font-size: .74rem; color: var(--muted); margin-top: .45rem; }
 .statusline .warn { color: var(--warn); font-weight: 600; }

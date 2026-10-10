@@ -3,7 +3,7 @@
 // (reads, drops, resyncs, lag, encoding, bitrate, fallbacks) with viewers and the MediaMTX path.
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import Pill from "./Pill.vue";
-import { STATE_TEXT, api, fmtBitrate, parseMetrics, probe, stateKind } from "../api.js";
+import { PUBLISH, STATE_TEXT, api, fmtBitrate, parseMetrics, probe, stateKind } from "../api.js";
 import { live } from "../store.js";
 
 const health = ref({ livez: null, statusz: null });
@@ -31,6 +31,8 @@ const ready = computed(() => live.ready?.body || {});
 const values = computed(() => live.config?.values || {});
 const info = computed(() => live.info || {});
 const pathsReady = computed(() => live.channels.filter((c) => c.mediamtx?.ready).length);
+const preview = computed(() => health.value.statusz?.body?.preview || {});
+const shared = computed(() => preview.value.mode === "shared");
 const m = (c) => metrics.value[String(c.index)] || {};
 const latencyMs = (c) => {
   const x = m(c);
@@ -53,7 +55,8 @@ const num = (v, digits = 0) => (Number.isFinite(v) ? v.toFixed(digits) : "–");
         <dt>NMOS registered</dt>
         <dd><Pill v-bind="yes(ready.nmos)" /></dd>
         <dt>MediaMTX API</dt>
-        <dd><Pill :text="ready.mediamtx ? 'answers' : 'no answer'" :kind="ready.mediamtx ? 'ok' : 'bad'" /></dd>
+        <dd v-if="shared"><Pill text="shared: not part of readiness" kind="neutral" /></dd>
+        <dd v-else><Pill :text="ready.mediamtx ? 'answers' : 'no answer'" :kind="ready.mediamtx ? 'ok' : 'bad'" /></dd>
         <dt>Restart required</dt>
         <dd><Pill :text="health.statusz?.body?.restart_required ? 'yes' : 'no'" :kind="health.statusz?.body?.restart_required ? 'warn' : 'ok'" /></dd>
         <dt>Live updates</dt>
@@ -72,28 +75,39 @@ const num = (v, digits = 0) => (Number.isFinite(v) ? v.toFixed(digits) : "–");
         <dt>GStreamer</dt>
         <dd>{{ info.gstreamer || "–" }}</dd>
         <dt>MediaMTX</dt>
-        <dd>{{ info.mediamtx || "–" }} <span class="muted">(examples pin {{ info.mediamtx_pin || "–" }})</span></dd>
+        <dd>{{ info.mediamtx || "–" }} <span class="muted">(built in: {{ info.mediamtx_pin || "–" }})</span></dd>
         <dt>Encoders</dt>
         <dd>{{ info.encoder_available || "–" }} <span class="muted">(ENCODER={{ values.ENCODER || "–" }})</span></dd>
       </dl>
     </div>
     <div class="panel">
-      <h3>MediaMTX</h3>
+      <h3>Previews (MediaMTX)</h3>
       <dl class="kv">
+        <dt>Mode</dt>
+        <dd>
+          <Pill :text="shared ? 'shared' : 'own'" :kind="preview.mode ? 'ok' : 'neutral'" />
+          <span v-if="preview.mediamtx" class="muted small">
+            built-in MediaMTX {{ preview.mediamtx.running ? "running" : "not running" }} · {{ preview.mediamtx.restarts }} restarts
+          </span>
+        </dd>
+        <dt>Publish to</dt>
+        <dd><code>{{ preview.publish_url || "–" }}</code></dd>
+        <dt>Path prefix</dt>
+        <dd><code>{{ preview.path_prefix || "–" }}</code></dd>
         <dt>Streams ready</dt>
         <dd>{{ pathsReady }} of {{ live.channels.length }}</dd>
         <dt>API</dt>
-        <dd><code>{{ values.MEDIAMTX_API_URL }}</code></dd>
-        <dt>RTSP ingest</dt>
-        <dd><code>{{ values.MEDIAMTX_RTSP_URL }}</code></dd>
+        <dd><code>{{ values.MEDIAMTX_API_URL || "none (no viewer counts)" }}</code></dd>
         <dt>WHEP</dt>
-        <dd>{{ values.MONITOR_WHEP_PUBLIC_URL || `port ${values.MEDIAMTX_WHEP_PORT}` }}</dd>
+        <dd>{{ values.PREVIEW_WHEP_URL || `port ${values.MEDIAMTX_WHEP_PORT}` }}</dd>
         <dt>HLS</dt>
-        <dd>{{ values.MONITOR_HLS_PUBLIC_URL || `port ${values.MEDIAMTX_HLS_PORT}` }}</dd>
-        <dt>ICE</dt>
-        <dd>{{ values.MONITOR_PUBLIC_IP }}:{{ values.MEDIAMTX_ICE_UDP_PORT }} UDP and TCP</dd>
-        <dt>Metrics port</dt>
-        <dd>{{ values.MEDIAMTX_METRICS_PORT === "0" ? "API port + 1" : values.MEDIAMTX_METRICS_PORT }}</dd>
+        <dd>{{ values.PREVIEW_HLS_URL || `port ${values.MEDIAMTX_HLS_PORT}` }}</dd>
+        <template v-if="!shared">
+          <dt>ICE</dt>
+          <dd>{{ values.MONITOR_PUBLIC_IP }}:{{ values.MEDIAMTX_ICE_UDP_PORT }} UDP and TCP</dd>
+          <dt>Metrics port</dt>
+          <dd>{{ values.MEDIAMTX_METRICS_PORT === "0" ? "API port + 1" : values.MEDIAMTX_METRICS_PORT }}</dd>
+        </template>
       </dl>
     </div>
   </div>
@@ -116,6 +130,7 @@ const num = (v, digits = 0) => (Number.isFinite(v) ? v.toFixed(digits) : "–");
           <th class="num" title="grains behind the flow's head">Lag</th>
           <th class="num" title="NVENC to x264">Fallbacks</th>
           <th class="num">Viewers</th>
+          <th>Publish</th>
           <th>MediaMTX</th>
         </tr>
       </thead>
@@ -134,6 +149,7 @@ const num = (v, digits = 0) => (Number.isFinite(v) ? v.toFixed(digits) : "–");
           <td class="num">{{ num(m(c).read_lag_grains, 1) }}</td>
           <td class="num"><Pill :text="num(m(c).encoder_fallbacks_total)" :kind="m(c).encoder_fallbacks_total ? 'warn' : 'ok'" /></td>
           <td class="num" :title="`${c.viewers.webrtc} WebRTC, ${c.viewers.hls} HLS`">{{ c.viewers.webrtc }} / {{ c.viewers.hls }}</td>
+          <td class="nowrap" :title="c.preview?.error || c.preview?.path"><Pill v-bind="PUBLISH[c.preview?.state] || PUBLISH.connecting" /></td>
           <td class="nowrap">
             <Pill :text="c.mediamtx?.ready ? 'ready' : 'no stream'" :kind="c.mediamtx?.ready ? 'ok' : 'warn'" />
             <span class="muted small"> {{ (c.mediamtx?.tracks || []).join(", ") }}</span>

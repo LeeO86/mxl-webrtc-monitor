@@ -8,7 +8,7 @@ import Meters from "./Meters.vue";
 import OriginBadge from "./OriginBadge.vue";
 import Pill from "./Pill.vue";
 import Segmented from "./Segmented.vue";
-import { STATE_TEXT, TALLY, TALLY_KIND, copyText, pairChannels, reasonText, stateKind } from "../api.js";
+import { PUBLISH, STATE_TEXT, TALLY, TALLY_KIND, copyText, pairChannels, reasonText, stateKind } from "../api.js";
 import { resolvePlayback } from "../player.js";
 import { applyDraft, drafts, hasConfigFile, isDirty, live, originOf, receiverOf, revertDraft, selectedChannel, settingsOf, tslEnabled } from "../store.js";
 
@@ -186,6 +186,11 @@ async function copy(text) {
           <dd>{{ c.audio_channels }} input channels · pair {{ pairChannels(c.audio_pair).join("/") }} · {{ c.downmix }}</dd>
           <dt>Viewers</dt>
           <dd>{{ c.viewers.webrtc }} WebRTC · {{ c.viewers.hls }} HLS</dd>
+          <dt>Publish</dt>
+          <dd>
+            <Pill v-bind="PUBLISH[c.preview?.state] || PUBLISH.connecting" :title="c.preview?.error" />
+            <code class="small"> {{ c.preview?.path }}</code>
+          </dd>
           <dt>MediaMTX</dt>
           <dd>
             <Pill :text="c.mediamtx?.ready ? 'stream ready' : 'no stream'" :kind="c.mediamtx?.ready ? 'ok' : 'warn'" />

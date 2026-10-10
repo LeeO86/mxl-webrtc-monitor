@@ -40,6 +40,7 @@ void ChannelBook::reset(Config const& cfg)
     {
         ChannelView view;
         view.settings = settings;
+        view.preview_path = cfg.streamPath(settings.index);
         for (auto const& previous : channels_)
         {
             if (previous.settings.index == settings.index)
@@ -75,6 +76,9 @@ void ChannelBook::reset(Config const& cfg)
                 view.tsl_rh = previous.tsl_rh;
                 view.tsl_text_tally = previous.tsl_text_tally;
                 view.tsl_text = previous.tsl_text;
+                view.preview_path = previous.preview_path;
+                view.publish_state = previous.publish_state;
+                view.publish_error = previous.publish_error;
             }
         }
         next.push_back(std::move(view));
@@ -241,6 +245,16 @@ void ChannelBook::setTally(int channel, int lh, int rh, int text, std::string co
         view->tsl_rh = rh;
         view->tsl_text_tally = text;
         view->tsl_text = label;
+    }
+}
+
+void ChannelBook::setPublish(int channel, std::string const& state, std::string const& error)
+{
+    std::lock_guard const lock{mu_};
+    if (auto* view = find(channel))
+    {
+        view->publish_state = state;
+        view->publish_error = error;
     }
 }
 

@@ -377,6 +377,10 @@ void HttpServer::handleConnection(int fd)
             out << "HTTP/1.1 " << response.status << " " << statusText(response.status) << "\r\n";
             out << "Content-Type: " << response.contentType << "\r\n";
             out << "Content-Length: " << response.body.size() << "\r\n";
+            for (auto const& [name, value] : response.headers)
+            {
+                out << name << ": " << value << "\r\n";
+            }
             out << "Connection: close\r\n\r\n";
             auto const header = out.str();
             writeAll(fd, header.data(), header.size());

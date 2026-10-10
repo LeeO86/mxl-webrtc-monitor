@@ -1,5 +1,9 @@
 # syntax=docker/dockerfile:1
 # Pins match mxl-fabrics-agent / mxl-decklink. See IMPLEMENTATION_PLAN.md.
+# The built-in MediaMTX (own preview mode) is the official image's static binary (MIT).
+ARG MEDIAMTX_VERSION=1.20.1
+
+FROM bluenviron/mediamtx:${MEDIAMTX_VERSION} AS mediamtx
 
 FROM node:22-bookworm AS webui
 WORKDIR /web
@@ -71,6 +75,8 @@ COPY --from=build /opt/mxl/lib/ /usr/local/lib/
 COPY --from=build /src/build/mxl-webrtc-monitor /usr/local/bin/mxl-webrtc-monitor
 COPY --from=build /src/build/mxl-flow-writer /usr/local/bin/mxl-flow-writer
 COPY tests/integration/fake_registry.py /usr/local/share/mxl-webrtc-monitor/fake_registry.py
+COPY --from=mediamtx /mediamtx /usr/local/bin/mediamtx
+COPY --from=mediamtx /LICENSE /usr/share/doc/mediamtx/LICENSE
 RUN ldconfig \
     && if ! getent passwd 1000 >/dev/null; then \
          useradd --uid 1000 --no-create-home --shell /usr/sbin/nologin mxl; \
@@ -79,5 +85,5 @@ USER 1000:1000
 LABEL org.opencontainers.image.source="https://github.com/LeeO86/mxl-webrtc-monitor" \
       org.opencontainers.image.licenses="MIT" \
       io.dmf.mxl.revision="218ddaa0a08c12ffe75fc475ae65aa3d9eef16d7"
-EXPOSE 8100 3242 3243
+EXPOSE 8100 3242 3243 8888 8889 8189/udp 8189/tcp
 ENTRYPOINT ["/usr/local/bin/mxl-webrtc-monitor"]

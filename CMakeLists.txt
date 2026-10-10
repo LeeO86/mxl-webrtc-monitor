@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(mxl-webrtc-monitor VERSION 1.2.0 LANGUAGES CXX)
+project(mxl-webrtc-monitor VERSION 1.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,6 +28,7 @@ add_library(mwm-core STATIC
     src/nmos/connections.cpp
     src/ops/metrics.cpp
     src/ops/httpserver.cpp
+    src/ops/child.cpp
     src/ops/mediamtx.cpp
     src/ops/api.cpp
     src/media/v210.cpp
@@ -51,6 +52,7 @@ if(MWM_BUILD_TESTS)
         tests/unit/test_platform.cpp
         tests/unit/test_v210.cpp
         tests/unit/test_tally.cpp
+        tests/unit/test_preview.cpp
     )
     target_include_directories(unit-tests PRIVATE src third_party)
     target_link_libraries(unit-tests PRIVATE mwm-core)
@@ -93,6 +95,7 @@ if(mxl_FOUND AND GST_FOUND)
         web/src/components/Segmented.vue
         web/src/components/SettingsTab.vue
         web/src/components/StatusTab.vue
+        web/src/components/WidgetPage.vue
     )
     set(WEBUI_GENERATED ${CMAKE_CURRENT_BINARY_DIR}/generated/ops/webui_generated.hpp)
     find_program(NPM_EXECUTABLE npm)

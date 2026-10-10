@@ -115,14 +115,62 @@ void validateTslMap(std::string const& text, int channels)
         parseInt("TSL_MAP channel", item.substr(colon + 1), 1, channels);
     }
 }
+
+// PREVIEW_PATH_PREFIX: MediaMTX path segments joined by '/'; outer slashes are dropped, empty is the default.
+std::string normalizePathPrefix(std::string const& value)
+{
+    auto const first = value.find_first_not_of('/');
+    if (first == std::string::npos)
+    {
+        return Config{}.preview_path_prefix;
+    }
+    auto const prefix = value.substr(first, value.find_last_not_of('/') - first + 1);
+    std::stringstream stream(prefix);
+    std::string segment;
+    while (std::getline(stream, segment, '/'))
+    {
+        if (segment.empty() || segment == "." || segment == ".." ||
+            segment.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~-") != std::string::npos)
+        {
+            throw ConfigError("PREVIEW_PATH_PREFIX must be path segments of letters, digits, '.', '_', '~' and '-' joined by '/'");
+        }
+    }
+    return prefix;
+}
+
+// 1.2.0 name -> PREVIEW_* name.
+std::vector<std::pair<std::string, std::string>> const kAliases = {
+    {"MEDIAMTX_RTSP_URL", "PREVIEW_PUBLISH_URL"},
+    {"MONITOR_WHEP_PUBLIC_URL", "PREVIEW_WHEP_URL"},
+    {"MONITOR_HLS_PUBLIC_URL", "PREVIEW_HLS_URL"},
+};
 } // namespace
+
+std::map<std::string, std::string> applyAliases(std::map<std::string, std::string> values)
+{
+    for (auto const& [alias, name] : kAliases)
+    {
+        auto const it = values.find(alias);
+        if (it == values.end())
+        {
+            continue;
+        }
+        if (values[name].empty())
+        {
+            values[name] = it->second;
+        }
+        values.erase(alias);
+    }
+    return values;
+}
 
 std::vector<std::string> configKeys()
 {
     return {"HOST_ID", "MXL_DOMAIN_SCAN_PATH", "MONITOR_CHANNELS", "MONITOR_PREVIEW_HEIGHT", "MONITOR_MAX_FPS", "MONITOR_VIDEO_BITRATE_KBPS",
-        "MONITOR_AUDIO_BITRATE_KBPS", "READ_OFFSET_GRAINS", "ENCODER", "MONITOR_PUBLIC_IP", "NMOS_HOST_ADDRESS", "MONITOR_WHEP_PUBLIC_URL",
-        "MONITOR_HLS_PUBLIC_URL", "STATE_DIR", "SHUTDOWN_TIMEOUT_S", "MXL_CLEANUP_ON_EXIT", "NMOS_LABEL", "NMOS_TAGS", "NMOS_QUERY_ADDRESS",
-        "NMOS_QUERY_PORT", "MEDIAMTX_METRICS_PORT", "MEDIAMTX_RTSP_URL", "MEDIAMTX_API_URL", "MEDIAMTX_CONFIG_PATH", "MEDIAMTX_WHEP_PORT",
+        "MONITOR_AUDIO_BITRATE_KBPS", "READ_OFFSET_GRAINS", "ENCODER", "MONITOR_PUBLIC_IP", "NMOS_HOST_ADDRESS", "PREVIEW_PUBLISH_URL",
+        "PREVIEW_PATH_PREFIX", "PREVIEW_WHEP_URL", "PREVIEW_HLS_URL", "WIDGET_FRAME_ANCESTORS", "MONITOR_WHEP_PUBLIC_URL", "MONITOR_HLS_PUBLIC_URL",
+        "STATE_DIR", "SHUTDOWN_TIMEOUT_S", "MXL_CLEANUP_ON_EXIT", "NMOS_LABEL", "NMOS_TAGS", "NMOS_QUERY_ADDRESS", "NMOS_QUERY_PORT",
+        "MEDIAMTX_METRICS_PORT", "MEDIAMTX_RTSP_URL", "MEDIAMTX_RTSP_PORT", "MEDIAMTX_API_URL", "MEDIAMTX_CONFIG_PATH", "MEDIAMTX_WHEP_PORT",
         "MEDIAMTX_HLS_PORT", "MEDIAMTX_ICE_UDP_PORT", "NMOS_ENABLE", "NMOS_REGISTRY_ADDRESS", "NMOS_REGISTRY_PORT", "NMOS_DNS_SD", "NMOS_PORT",
         "NMOS_SEED", "WEB_PORT", "LOG_LEVEL", "METRICS_AUDIO_PEAK", "TSL_ENABLE", "TSL_UDP_PORT", "TSL_TCP_PORT", "TSL_SCREEN", "TSL_MAP",
         "MONITOR_CONFIG_FILE"};
@@ -130,25 +178,35 @@ std::vector<std::string> configKeys()
 
 std::string normalizePublicBaseUrl(std::string const& key, std::string const& value)
 {
+    return normalizeBaseUrl(key, value, {"http", "https"});
+}
+
+std::string normalizeBaseUrl(std::string const& key, std::string const& value, std::vector<std::string> const& schemes)
+{
     if (value.empty())
     {
         return {};
     }
+    std::string names;
+    for (auto const& name : schemes)
+    {
+        names += (names.empty() ? "" : " or ") + name;
+    }
     auto const schemeSep = value.find("://");
     if (schemeSep == std::string::npos || schemeSep == 0)
     {
-        throw ConfigError(key + " must be an absolute http or https URL");
+        throw ConfigError(key + " must be an absolute " + names + " URL");
     }
     auto scheme = lower(value.substr(0, schemeSep));
-    if (scheme != "http" && scheme != "https")
+    if (std::find(schemes.begin(), schemes.end(), scheme) == schemes.end())
     {
-        throw ConfigError(key + " must be an absolute http or https URL");
+        throw ConfigError(key + " must be an absolute " + names + " URL");
     }
     auto rest = value.substr(schemeSep + 3);
     if (rest.empty() || rest.find('@') != std::string::npos || rest.find(' ') != std::string::npos || rest.find('#') != std::string::npos ||
         rest.find('?') != std::string::npos)
     {
-        throw ConfigError(key + " must be an absolute http or https URL with a host and no path");
+        throw ConfigError(key + " must be an absolute " + names + " URL with a host and no path");
     }
     auto const slash = rest.find('/');
     auto authority = slash == std::string::npos ? rest : rest.substr(0, slash);
@@ -618,8 +676,9 @@ void applyChannelValue(ChannelSettings& channel, std::string const& field, std::
     }
 }
 
-Config parseConfig(std::map<std::string, std::string> const& values, std::vector<ChannelSettings> const& channelOverrides)
+Config parseConfig(std::map<std::string, std::string> const& input, std::vector<ChannelSettings> const& channelOverrides)
 {
+    auto const values = applyAliases(input);
     requireKnown(values);
     Config cfg;
     cfg.host_id = valueOr(values, "HOST_ID", hostname());
@@ -659,8 +718,23 @@ Config parseConfig(std::map<std::string, std::string> const& values, std::vector
         cfg.nmos_host_address = cfg.monitor_public_ip;
     }
     validateAnnounceAddress("NMOS_HOST_ADDRESS", cfg.nmos_host_address);
-    cfg.monitor_whep_public_url = normalizePublicBaseUrl("MONITOR_WHEP_PUBLIC_URL", valueOr(values, "MONITOR_WHEP_PUBLIC_URL", ""));
-    cfg.monitor_hls_public_url = normalizePublicBaseUrl("MONITOR_HLS_PUBLIC_URL", valueOr(values, "MONITOR_HLS_PUBLIC_URL", ""));
+    cfg.preview_publish_url = normalizeBaseUrl("PREVIEW_PUBLISH_URL", valueOr(values, "PREVIEW_PUBLISH_URL", ""), {"rtsp", "rtsps"});
+    cfg.preview_path_prefix = normalizePathPrefix(valueOr(values, "PREVIEW_PATH_PREFIX", ""));
+    cfg.preview_whep_url = normalizePublicBaseUrl("PREVIEW_WHEP_URL", valueOr(values, "PREVIEW_WHEP_URL", ""));
+    cfg.preview_hls_url = normalizePublicBaseUrl("PREVIEW_HLS_URL", valueOr(values, "PREVIEW_HLS_URL", ""));
+    cfg.widget_frame_ancestors = valueOr(values, "WIDGET_FRAME_ANCESTORS", "");
+    if (cfg.widget_frame_ancestors.empty())
+    {
+        cfg.widget_frame_ancestors = Config{}.widget_frame_ancestors;
+    }
+    // One CSP directive's source list: a ';' or ',' would start another directive or policy.
+    for (unsigned char const c : cfg.widget_frame_ancestors)
+    {
+        if (c < 0x20 || c == 0x7f || c == ';' || c == ',')
+        {
+            throw ConfigError("WIDGET_FRAME_ANCESTORS must be a CSP source list, e.g. 'self' https://designer.example");
+        }
+    }
     cfg.state_dir = valueOr(values, "STATE_DIR", cfg.state_dir);
     while (cfg.state_dir.size() > 1 && cfg.state_dir.back() == '/')
     {
@@ -677,8 +751,12 @@ Config parseConfig(std::map<std::string, std::string> const& values, std::vector
     }
     cfg.nmos_label = valueOr(values, "NMOS_LABEL", "");
     cfg.nmos_tags = parseTags(valueOr(values, "NMOS_TAGS", ""));
-    cfg.mediamtx_rtsp_url = valueOr(values, "MEDIAMTX_RTSP_URL", cfg.mediamtx_rtsp_url);
-    cfg.mediamtx_api_url = valueOr(values, "MEDIAMTX_API_URL", cfg.mediamtx_api_url);
+    cfg.mediamtx_rtsp_port = parseInt("MEDIAMTX_RTSP_PORT", valueOr(values, "MEDIAMTX_RTSP_PORT", "8554"), 1, 65535);
+    auto const api = valueOr(values, "MEDIAMTX_API_URL", "");
+    if (!api.empty() || cfg.previewShared())
+    {
+        cfg.mediamtx_api_url = api;
+    }
     if (values.find("MEDIAMTX_CONFIG_PATH") == values.end())
     {
         cfg.mediamtx_config_path = cfg.state_dir + "/mediamtx.yml";
@@ -794,8 +872,8 @@ Config loadLayered(std::map<std::string, std::string> const& fileValues, std::ma
             }
         }
     };
-    take(fileValues, ValueOrigin::File);
-    take(envValues, ValueOrigin::Env);
+    take(applyAliases(fileValues), ValueOrigin::File);
+    take(applyAliases(envValues), ValueOrigin::Env);
     auto cfg = parseConfig(merged, channelOverrides);
     if (origin != nullptr)
     {
@@ -821,8 +899,11 @@ std::map<std::string, std::string> configToMap(Config const& cfg)
     out["ENCODER"] = cfg.encoder;
     out["MONITOR_PUBLIC_IP"] = cfg.monitor_public_ip;
     out["NMOS_HOST_ADDRESS"] = cfg.nmos_host_address;
-    out["MONITOR_WHEP_PUBLIC_URL"] = cfg.monitor_whep_public_url;
-    out["MONITOR_HLS_PUBLIC_URL"] = cfg.monitor_hls_public_url;
+    out["PREVIEW_PUBLISH_URL"] = cfg.preview_publish_url;
+    out["PREVIEW_PATH_PREFIX"] = cfg.preview_path_prefix;
+    out["PREVIEW_WHEP_URL"] = cfg.preview_whep_url;
+    out["PREVIEW_HLS_URL"] = cfg.preview_hls_url;
+    out["WIDGET_FRAME_ANCESTORS"] = cfg.widget_frame_ancestors;
     out["STATE_DIR"] = cfg.state_dir;
     out["SHUTDOWN_TIMEOUT_S"] = std::to_string(cfg.shutdown_timeout_s);
     out["MXL_CLEANUP_ON_EXIT"] = cfg.mxl_cleanup_on_exit ? "true" : "false";
@@ -831,7 +912,7 @@ std::map<std::string, std::string> configToMap(Config const& cfg)
     out["NMOS_QUERY_ADDRESS"] = cfg.queryHost();
     out["NMOS_QUERY_PORT"] = std::to_string(cfg.queryPort());
     out["MEDIAMTX_METRICS_PORT"] = std::to_string(cfg.mediamtx_metrics_port);
-    out["MEDIAMTX_RTSP_URL"] = cfg.mediamtx_rtsp_url;
+    out["MEDIAMTX_RTSP_PORT"] = std::to_string(cfg.mediamtx_rtsp_port);
     out["MEDIAMTX_API_URL"] = cfg.mediamtx_api_url;
     out["MEDIAMTX_CONFIG_PATH"] = cfg.mediamtx_config_path;
     out["MEDIAMTX_WHEP_PORT"] = std::to_string(cfg.mediamtx_whep_port);

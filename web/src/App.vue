@@ -35,6 +35,7 @@ const running = computed(() => count((c) => c.video.state === "running"));
 const waiting = computed(() => count((c) => c.video.state === "waiting" || c.audio.state === "waiting"));
 const noSignal = computed(() => count((c) => c.video.state === "no_signal" || c.audio.state === "no_signal"));
 const mediamtxDown = computed(() => live.ready && live.ready.body && !live.ready.body.mediamtx);
+const publishErrors = computed(() => count((c) => c.preview?.state === "error"));
 const registration = computed(() => {
   const n = live.nmos;
   if (!n || !n.enabled) return null;
@@ -68,6 +69,7 @@ onUnmounted(() => {
     <Pill v-if="waiting" :text="`${waiting} waiting`" kind="warn" title="routed, but the domain or flow is not there (yet)" />
     <Pill v-if="noSignal" :text="`${noSignal} no signal`" kind="warn" title="the flow exists but has no new grains" />
     <Pill v-if="mediamtxDown" text="MediaMTX down" kind="bad" title="the MediaMTX API does not answer: no WHEP or HLS" />
+    <Pill v-if="publishErrors" :text="`${publishErrors} not published`" kind="bad" title="the RTSP publish to MediaMTX failed (Status tab)" />
     <Pill v-if="registration" :text="registration.text" :kind="registration.kind" title="NMOS registration" />
     <Pill :text="live.connected ? 'live' : 'offline'" :kind="live.connected ? 'ok' : 'bad'" title="/api/v1/events" />
     <span v-if="live.info" class="muted small">v{{ live.info.version }} · MXL {{ live.info.mxl_version.split("-")[0] }} · MediaMTX {{ live.info.mediamtx }}</span>
@@ -79,7 +81,7 @@ onUnmounted(() => {
     <button class="btn small secondary" @click="go('settings')">Settings</button>
   </div>
   <div v-if="blocked" class="banner warn">
-    This page is on https and a playback URL is http: the browser blocks it. Set MONITOR_WHEP_PUBLIC_URL and MONITOR_HLS_PUBLIC_URL.
+    This page is on https and a playback URL is http: the browser blocks it. Set PREVIEW_WHEP_URL and PREVIEW_HLS_URL.
   </div>
   <div v-if="live.actionError" class="banner bad">
     {{ live.actionError }}

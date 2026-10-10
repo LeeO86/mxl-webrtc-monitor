@@ -7,7 +7,7 @@ NMOS-controlled preview of MXL flows in a browser. `SPECIFICATION.md` is the con
 
 The image build in `docker/Dockerfile` is the supported path. A local build needs:
 
-- CMake ≥ 3.24, Ninja, GCC ≥ 12 or Clang ≥ 16
+- CMake â‰¥ 3.24, Ninja, GCC â‰¥ 12 or Clang â‰¥ 16
 - GStreamer 1.24 (base, good, bad, ugly, libav, rtsp, x) and the development packages
 - MXL `218ddaa0a08c12ffe75fc475ae65aa3d9eef16d7` built with `-DMXL_ENABLE_FABRICS_OFI=OFF`
 - Sony nmos-cpp at `fe303849527394b03bdedc8f161f377fe458bb62` when `-DMWM_WITH_NMOS=ON`
@@ -28,6 +28,6 @@ LD_LIBRARY_PATH=/opt/mxl/lib tests/integration/monitor.sh
 ## Runtime notes
 
 - Default web port is 8100. NMOS is 3242 and the WebSocket is 3243.
-- MediaMTX is a sidecar. The process writes its config to `MEDIAMTX_CONFIG_PATH` on startup.
+- MediaMTX is built into the image. Without `PREVIEW_PUBLISH_URL` the process writes its config to `MEDIAMTX_CONFIG_PATH` and starts `mediamtx` from `PATH` as a child; a local run and `tests/integration/monitor.sh` (`MEDIAMTX_BIN`) need the binary.
 - WebRTC needs UDP to `MEDIAMTX_ICE_UDP_PORT` (8189). HLS on 8888 works over TCP when UDP is blocked.
 - Two monitors on one host need distinct web, NMOS, RTSP, HLS, WHEP and ICE ports.

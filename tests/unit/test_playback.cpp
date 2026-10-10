@@ -37,18 +37,18 @@ picojson::object const& playbackOf(picojson::value const& root)
 TEST_CASE("public playback base urls")
 {
     auto const unset = mwm::parseConfig({{"HOST_ID", "test"}, {"MONITOR_PUBLIC_IP", "10.1.2.3"}});
-    CHECK(unset.monitor_whep_public_url.empty());
-    CHECK(unset.monitor_hls_public_url.empty());
+    CHECK(unset.preview_whep_url.empty());
+    CHECK(unset.preview_hls_url.empty());
 
     auto const cfg = mwm::parseConfig({
         {"HOST_ID", "test"},
-        {"MONITOR_WHEP_PUBLIC_URL", "https://mon1-whep.small.mxl.ipla.media.int/"},
-        {"MONITOR_HLS_PUBLIC_URL", "http://127.0.0.1:18888"},
+        {"PREVIEW_WHEP_URL", "https://mon1-whep.small.mxl.ipla.media.int/"},
+        {"PREVIEW_HLS_URL", "http://127.0.0.1:18888"},
     });
-    CHECK(cfg.monitor_whep_public_url == "https://mon1-whep.small.mxl.ipla.media.int");
-    CHECK(cfg.monitor_hls_public_url == "http://127.0.0.1:18888");
-    CHECK(mwm::configToMap(cfg).at("MONITOR_WHEP_PUBLIC_URL") == cfg.monitor_whep_public_url);
-    CHECK(mwm::configToEnv(cfg).find("MONITOR_HLS_PUBLIC_URL=http://127.0.0.1:18888\n") != std::string::npos);
+    CHECK(cfg.preview_whep_url == "https://mon1-whep.small.mxl.ipla.media.int");
+    CHECK(cfg.preview_hls_url == "http://127.0.0.1:18888");
+    CHECK(mwm::configToMap(cfg).at("PREVIEW_WHEP_URL") == cfg.preview_whep_url);
+    CHECK(mwm::configToEnv(cfg).find("PREVIEW_HLS_URL=http://127.0.0.1:18888\n") != std::string::npos);
 
     CHECK(mwm::normalizePublicBaseUrl("MONITOR_HLS_PUBLIC_URL", "HTTP://hls.example:8443/") == "http://hls.example:8443");
     CHECK_THROWS_AS(mwm::parseConfig({{"MONITOR_WHEP_PUBLIC_URL", "mon1-whep.example"}}), mwm::ConfigError);
@@ -62,8 +62,8 @@ TEST_CASE("channel playback json")
 {
     auto const direct = channelsJson({{"HOST_ID", "test"}, {"MONITOR_PUBLIC_IP", "10.1.2.3"}});
     auto const& plain = playbackOf(direct);
-    CHECK(plain.at("whep").get<std::string>() == "http://10.1.2.3:8889/ch1/whep");
-    CHECK(plain.at("hls").get<std::string>() == "http://10.1.2.3:8888/ch1/index.m3u8");
+    CHECK(plain.at("whep").get<std::string>() == "http://10.1.2.3:8889/mxl-webrtc-monitor/ch1/whep");
+    CHECK(plain.at("hls").get<std::string>() == "http://10.1.2.3:8888/mxl-webrtc-monitor/ch1/index.m3u8");
     CHECK(plain.at("public").get<picojson::object>().at("whep").get<bool>() == false);
     CHECK(plain.at("public").get<picojson::object>().at("hls").get<bool>() == false);
 
@@ -74,8 +74,8 @@ TEST_CASE("channel playback json")
         {"MONITOR_HLS_PUBLIC_URL", "https://mon1-hls.small.mxl.ipla.media.int/"},
     });
     auto const& playback = playbackOf(proxied);
-    CHECK(playback.at("whep").get<std::string>() == "https://mon1-whep.small.mxl.ipla.media.int/ch1/whep");
-    CHECK(playback.at("hls").get<std::string>() == "https://mon1-hls.small.mxl.ipla.media.int/ch1/index.m3u8");
+    CHECK(playback.at("whep").get<std::string>() == "https://mon1-whep.small.mxl.ipla.media.int/mxl-webrtc-monitor/ch1/whep");
+    CHECK(playback.at("hls").get<std::string>() == "https://mon1-hls.small.mxl.ipla.media.int/mxl-webrtc-monitor/ch1/index.m3u8");
     CHECK(playback.at("public").get<picojson::object>().at("whep").get<bool>() == true);
     CHECK(playback.at("public").get<picojson::object>().at("hls").get<bool>() == true);
 }

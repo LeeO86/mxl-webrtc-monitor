@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0
+
+The platform's shared-preview contract (platform spec §11.5, D-185) and the first operator-screen widget. Backwards compatible: the 1.2.0 setting names stay as aliases.
+
+- **MediaMTX is built in.** The image carries the official MediaMTX 1.20.1 binary (`/usr/local/bin/mediamtx`, MIT licence in `/usr/share/doc/mediamtx/`, about 55 MB). Without `PREVIEW_PUBLISH_URL` (own mode, the default) the monitor starts it as a child process with the generated config, starts it again when it exits (1 s, doubling to 10 s) and stops it on shutdown. No sidecar container is needed. Its RTSP ingest is `127.0.0.1:MEDIAMTX_RTSP_PORT` (new, default 8554); the other `MEDIAMTX_*` ports are unchanged.
+- **Shared mode.** `PREVIEW_PUBLISH_URL` (e.g. `rtsp://mxl-mediamtx.mxl-platform.svc:8554`) publishes the channels to that MediaMTX and starts none here. `/readyz` then does not depend on MediaMTX; `MEDIAMTX_API_URL` is used only when set (viewers, stream state).
+- **Stream paths** are `<PREVIEW_PATH_PREFIX>/ch<n>` (default prefix `mxl-webrtc-monitor`, e.g. `test-all/mon/ch1` with `test-all/mon`). The page and the API's `playback` URLs follow; external links to `/ch<n>/...` need the prefix.
+- **Setting names.** `PREVIEW_PUBLISH_URL`, `PREVIEW_PATH_PREFIX`, `PREVIEW_WHEP_URL` and `PREVIEW_HLS_URL`, the same in every repo with browser previews. `MEDIAMTX_RTSP_URL`, `MONITOR_WHEP_PUBLIC_URL` and `MONITOR_HLS_PUBLIC_URL` stay accepted as aliases; the new name wins when both are set. A 1.2.0 sidecar deployment sets `MEDIAMTX_RTSP_URL`, so it runs in shared mode against its sidecar, which still gets its config. A sidecar deployment without `MEDIAMTX_RTSP_URL` should drop the sidecar: the built-in MediaMTX takes the same ports.
+- **Publish state.** Each channel reports `connecting`, `publishing` or `error` (with the error) for its RTSP publish: `preview` in `/api/v1/channels` and the events, `preview` in `/statusz` (mode, publish URL, prefix, the built-in MediaMTX's `running` and `restarts`, the streams), and the metrics `mxl_webrtc_monitor_preview_mode{mode}` and `mxl_webrtc_monitor_preview_publish_state{channel,state}`.
+- **Widgets.** `GET /widgets` lists the operator-screen widgets; `GET /widget/channel?ch=<n>[&labels=][&meters=][&theme=dark|light|transparent]` is one channel's tile without the app around it (picture, label, TSL lamps, tally border and text tally, meters), using the monitor's own API. The `/widget` routes send `Content-Security-Policy: frame-ancestors <WIDGET_FRAME_ANCESTORS>` (new, default `'self'`) and no `X-Frame-Options`. The widget posts `widget-ready` and `widget-size` to its parent.
+- Web UI: the Status tab shows the preview mode, publish URL, path prefix, the built-in MediaMTX and each channel's publish state; the Channels tab the stream path and publish state; the header a pill for channels that are not published. The Settings tab lists the new names.
+- The Compose and Kubernetes examples use the `1.3.0` image and no MediaMTX sidecar.
+
 ## 1.2.0
 
 TSL UMD 5.0 tally per channel (platform request T3). Off by default, so existing deployments are unchanged.
