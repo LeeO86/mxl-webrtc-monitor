@@ -13,7 +13,7 @@ namespace mwm
 std::string renderMediamtxConfig(Config const& cfg)
 {
     auto api = splitHostPort(cfg.mediamtx_api_url);
-    auto rtsp = splitHostPort(cfg.mediamtx_rtsp_url);
+    auto rtsp = splitHostPort(cfg.publishUrl());
     std::string apiAddr = "127.0.0.1:9997";
     if (api && api->second > 0)
     {
@@ -147,8 +147,9 @@ std::string mediamtxVersionFromInfo(std::string const& body)
     return version;
 }
 
-std::vector<MediamtxPath> mediamtxPathsFromList(std::string const& body)
+std::vector<MediamtxPath> mediamtxPathsFromList(std::string const& body, std::string const& prefix)
 {
+    auto const head = prefix + "/ch";
     std::vector<MediamtxPath> out;
     std::string err;
     auto const root = json::parse(body, &err);
@@ -165,12 +166,13 @@ std::vector<MediamtxPath> mediamtxPathsFromList(std::string const& body)
     for (auto const& item : items->second.get<picojson::array>())
     {
         auto const name = json::fieldString(item, "name");
-        if (name.size() < 3 || name.size() > 4 || name.rfind("ch", 0) != 0 || name.find_first_not_of("0123456789", 2) != std::string::npos)
+        if (name.size() <= head.size() || name.size() > head.size() + 2 || name.compare(0, head.size(), head) != 0 ||
+            name.find_first_not_of("0123456789", head.size()) != std::string::npos)
         {
             continue;
         }
         MediamtxPath path;
-        path.channel = std::stoi(name.substr(2));
+        path.channel = std::stoi(name.substr(head.size()));
         auto const& itemObj = item.get<picojson::object>();
         auto const ready = itemObj.find("ready");
         path.ready = ready != itemObj.end() && ready->second.is<bool>() && ready->second.get<bool>();

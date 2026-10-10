@@ -57,6 +57,11 @@ struct ChannelView
     int tsl_rh = 0;
     int tsl_text_tally = 0;
     std::string tsl_text;
+    // The MediaMTX path the channel publishes to (fixed at start), and that RTSP publish: "connecting",
+    // "publishing" or "error"; publish_error is the last error until the channel publishes again.
+    std::string preview_path;
+    std::string publish_state = "connecting";
+    std::string publish_error;
 };
 
 class ChannelBook
@@ -76,6 +81,7 @@ public:
     void setViewers(int channel, int webrtc, int hls);
     void setMediamtxPath(int channel, bool ready, std::vector<std::string> tracks);
     void setTally(int channel, int lh, int rh, int text, std::string const& label);
+    void setPublish(int channel, std::string const& state, std::string const& error);
     void observeLatency(int channel, double seconds);
 
     std::vector<ChannelView> snapshot() const;

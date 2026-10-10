@@ -94,6 +94,13 @@ export const stateKind = (state) => ({ running: "ok", no_signal: "warn", waiting
 const REASON_TEXT = { domain_not_found: "domain not found", flow_not_found: "flow not found" };
 export const reasonText = (reason) => REASON_TEXT[reason] || (reason || "").replaceAll("_", " ");
 
+/** RTSP publish state of a channel's preview, as a pill. */
+export const PUBLISH = {
+  publishing: { text: "publishing", kind: "ok" },
+  connecting: { text: "connecting", kind: "neutral" },
+  error: { text: "error", kind: "bad" },
+};
+
 /** TSL tally values (0 off, 1 red, 2 green, 3 amber) as words, their pill colour, and the CSS classes of a lamp, border or label. */
 export const TALLY = ["off", "red", "green", "amber"];
 export const TALLY_KIND = ["neutral", "bad", "ok", "warn"];

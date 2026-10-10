@@ -40,6 +40,7 @@ std::string LatencyHistogram::render(std::string const& name, std::string const&
 namespace
 {
 char const* kStates[] = {"not_routed", "waiting", "no_signal", "running"};
+char const* kPublishStates[] = {"connecting", "publishing", "error"};
 
 void gaugeState(std::ostringstream& out, int channel, char const* kind, RunState state)
 {
@@ -52,7 +53,8 @@ void gaugeState(std::ostringstream& out, int channel, char const* kind, RunState
 } // namespace
 
 std::string renderMetrics(Config const& cfg, std::vector<ChannelView> const& channels, std::string const& mxlVersion, std::string const& gstVersion,
-    std::string const& encoderAvailable, std::vector<LatencyHistogram const*> const& latency, std::vector<std::uint64_t> const& fallbacks)
+    std::string const& encoderAvailable, std::vector<LatencyHistogram const*> const& latency, std::vector<std::uint64_t> const& fallbacks,
+    std::string const& previewMode)
 {
     (void)gstVersion;
     std::ostringstream out;
@@ -71,6 +73,14 @@ std::string renderMetrics(Config const& cfg, std::vector<ChannelView> const& cha
     out << "# TYPE mxl_webrtc_monitor_encoder_fallbacks_total counter\n";
     out << "# TYPE mxl_webrtc_monitor_output_bitrate_bps gauge\n";
     out << "# TYPE mxl_webrtc_monitor_viewers gauge\n";
+    out << "# HELP mxl_webrtc_monitor_preview_mode Where the previews are published: own (built-in MediaMTX) or shared.\n";
+    out << "# TYPE mxl_webrtc_monitor_preview_mode gauge\n";
+    for (auto const* mode : {"own", "shared"})
+    {
+        out << "mxl_webrtc_monitor_preview_mode{mode=\"" << mode << "\"} " << (previewMode == mode ? 1 : 0) << "\n";
+    }
+    out << "# HELP mxl_webrtc_monitor_preview_publish_state State of each channel's RTSP publish.\n";
+    out << "# TYPE mxl_webrtc_monitor_preview_publish_state gauge\n";
     if (cfg.metrics_audio_peak)
     {
         out << "# TYPE mxl_webrtc_monitor_audio_peak_dbfs gauge\n";
@@ -97,6 +107,11 @@ std::string renderMetrics(Config const& cfg, std::vector<ChannelView> const& cha
         out << "mxl_webrtc_monitor_output_bitrate_bps{channel=\"" << n << "\"} " << channel.bitrate_bps << "\n";
         out << "mxl_webrtc_monitor_viewers{channel=\"" << n << "\",protocol=\"webrtc\"} " << channel.viewers_webrtc << "\n";
         out << "mxl_webrtc_monitor_viewers{channel=\"" << n << "\",protocol=\"hls\"} " << channel.viewers_hls << "\n";
+        for (auto const* state : kPublishStates)
+        {
+            out << "mxl_webrtc_monitor_preview_publish_state{channel=\"" << n << "\",state=\"" << state << "\"} " << (channel.publish_state == state ? 1 : 0)
+                << "\n";
+        }
         if (cfg.metrics_audio_peak)
         {
             for (std::size_t ch = 0; ch < channel.peak_dbfs.size(); ++ch)

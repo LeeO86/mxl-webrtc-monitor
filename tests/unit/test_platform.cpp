@@ -26,8 +26,10 @@ TEST_CASE("mediamtx version comes from its info api")
 TEST_CASE("mediamtx path list gives each channel's stream state")
 {
     auto const paths = mwm::mediamtxPathsFromList(
-        R"({"itemCount":3,"items":[{"name":"ch1","ready":true,"tracks":["Opus","H264"],"readers":[{"type":"webRTCSession","id":"a"},{"type":"hlsMuxer","id":"b"},{"type":"webRTCSession","id":"c"}]},)"
-        R"({"name":"ch12","ready":false,"tracks":[],"readers":[]},{"name":"other","ready":true},{"name":"chx","ready":true}]})");
+        R"({"itemCount":3,"items":[{"name":"test-all/mon/ch1","ready":true,"tracks":["Opus","H264"],"readers":[{"type":"webRTCSession","id":"a"},{"type":"hlsMuxer","id":"b"},{"type":"webRTCSession","id":"c"}]},)"
+        R"({"name":"test-all/mon/ch12","ready":false,"tracks":[],"readers":[]},{"name":"other","ready":true},{"name":"test-all/mon/chx","ready":true},)"
+        R"({"name":"ch3","ready":true},{"name":"test-all/mon2/ch4","ready":true},{"name":"test-all/mon/ch123","ready":true}]})",
+        "test-all/mon");
     REQUIRE(paths.size() == 2);
     CHECK(paths[0].channel == 1);
     CHECK(paths[0].ready);
@@ -37,8 +39,8 @@ TEST_CASE("mediamtx path list gives each channel's stream state")
     CHECK(paths[1].channel == 12);
     CHECK_FALSE(paths[1].ready);
     CHECK(paths[1].tracks.empty());
-    CHECK(mwm::mediamtxPathsFromList("not json").empty());
-    CHECK(mwm::mediamtxPathsFromList(R"({"items":{}})").empty());
+    CHECK(mwm::mediamtxPathsFromList("not json", "test-all/mon").empty());
+    CHECK(mwm::mediamtxPathsFromList(R"({"items":{}})", "test-all/mon").empty());
 }
 
 TEST_CASE("chunked http bodies are joined")

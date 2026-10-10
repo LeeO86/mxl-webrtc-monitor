@@ -26,6 +26,7 @@ struct HttpResponse
     std::string contentType = "application/json; charset=utf-8";
     std::string body;
     bool close = false;
+    std::vector<std::pair<std::string, std::string>> headers{};
 };
 
 using HttpHandler = std::function<HttpResponse(HttpRequest const&)>;

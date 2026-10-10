@@ -4,6 +4,7 @@
 #include "config/store.hpp"
 #include "ops/httpserver.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -20,6 +21,13 @@ struct ServiceInfo
     std::string encoder_available;
 };
 
+// The built-in MediaMTX (own mode).
+struct ProcessState
+{
+    bool running = false;
+    std::uint64_t restarts = 0;
+};
+
 class Api
 {
 public:
@@ -32,6 +40,7 @@ public:
     void setMediamtxReachable(std::function<bool()> probe);
     void setMediamtxVersion(std::function<std::string()> probe);
     void setNmosSummary(std::function<std::string()> summary);
+    void setMediamtxProcess(std::function<ProcessState()> probe);
 
     HttpResponse handle(HttpRequest const& request);
     std::string eventsJson() const;
@@ -39,9 +48,11 @@ public:
 private:
     std::string channelsJson() const;
     std::string infoJson() const;
+    std::string statusJson() const;
 
     std::shared_ptr<ConfigStore> store_;
     std::shared_ptr<ChannelBook> book_;
+    Config startup_; // the configuration the process started with (the preview mode, publish URL and prefix)
     ServiceInfo info_;
     std::string indexPage_;
     std::function<std::string()> metrics_;
@@ -49,5 +60,6 @@ private:
     std::function<bool()> mediamtx_;
     std::function<std::string()> mediamtxVersion_;
     std::function<std::string()> nmosSummary_;
+    std::function<ProcessState()> mediamtxProcess_;
 };
 } // namespace mwm

@@ -5,6 +5,7 @@
 #include "nmos/connections.hpp"
 #include "nmos/node.hpp"
 #include "ops/api.hpp"
+#include "ops/child.hpp"
 #include "ops/httpserver.hpp"
 #include "ops/mediamtx.hpp"
 #include "ops/metrics.hpp"
@@ -59,6 +60,11 @@ std::string mxlVersion()
 
 void refreshViewers(mwm::Config const& cfg, mwm::ChannelBook& book)
 {
+    // Shared mode without MEDIAMTX_API_URL: no API to ask.
+    if (cfg.mediamtx_api_url.empty())
+    {
+        return;
+    }
     auto const response = mwm::httpGet(cfg.mediamtx_api_url + "/v3/paths/list", 700);
     if (response.status != 200)
     {
@@ -66,7 +72,7 @@ void refreshViewers(mwm::Config const& cfg, mwm::ChannelBook& book)
     }
     // A channel without a path has no stream in MediaMTX (the path goes when its publisher does).
     std::vector<bool> seen(static_cast<std::size_t>(cfg.monitor_channels) + 1, false);
-    for (auto const& path : mwm::mediamtxPathsFromList(response.body))
+    for (auto const& path : mwm::mediamtxPathsFromList(response.body, cfg.preview_path_prefix))
     {
         if (path.channel < 1 || path.channel > cfg.monitor_channels)
         {
@@ -150,7 +156,16 @@ int main(int argc, char** argv)
             mwm::log::error("mediamtx_config_failed", {{"error", configError}});
             return 75;
         }
-        mwm::log::info("startup", {{"version", mwm::kVersion}, {"host_id", cfg.host_id}, {"channels", std::to_string(cfg.monitor_channels)}});
+        mwm::log::info("startup", {{"version", mwm::kVersion}, {"host_id", cfg.host_id}, {"channels", std::to_string(cfg.monitor_channels)},
+                                      {"preview", cfg.previewShared() ? "shared" : "own"}, {"publish_url", cfg.publishUrl()},
+                                      {"path_prefix", cfg.preview_path_prefix}});
+        // Own mode: the image's MediaMTX runs as a child with the generated config. Shared mode starts
+        // none (the config is still written, for a 1.2.0-style sidecar).
+        mwm::ChildProcess mediamtx("mediamtx");
+        if (!cfg.previewShared())
+        {
+            mediamtx.start({"mediamtx", cfg.mediamtx_config_path});
+        }
         auto store = std::make_shared<mwm::ConfigStore>(cfg, origin, fileValues);
         auto book = std::make_shared<mwm::ChannelBook>(cfg);
         mwm::loadConnections(cfg, *book);
@@ -169,19 +184,33 @@ int main(int argc, char** argv)
 #if defined(MWM_HAS_UI)
         api.setIndexPage(std::string(mwm::webui::indexHtml()));
 #endif
-        api.setMetrics([store, book, &media] {
+        api.setMetrics([store, book, &media, shared = cfg.previewShared()] {
             auto const current = store->get();
-            return mwm::renderMetrics(current, book->snapshot(), mxlVersion(), gst_version_string(), media.encoderAvailable(), media.latency(), media.fallbacks());
+            return mwm::renderMetrics(current, book->snapshot(), mxlVersion(), gst_version_string(), media.encoderAvailable(), media.latency(), media.fallbacks(),
+                shared ? "shared" : "own");
         });
         api.setNmosRegistered([&] { return nmos.registered(); });
+        // Readiness needs the own MediaMTX; a shared one is not part of it.
         api.setMediamtxReachable([cfg] {
+            if (cfg.previewShared())
+            {
+                return true;
+            }
             auto const response = mwm::httpGet(cfg.mediamtx_api_url + "/v3/paths/list", 500);
             return response.status == 200;
         });
         api.setMediamtxVersion([cfg] {
+            if (cfg.mediamtx_api_url.empty())
+            {
+                return std::string{};
+            }
             auto const response = mwm::httpGet(cfg.mediamtx_api_url + "/v3/info", 500);
             return response.status == 200 ? mwm::mediamtxVersionFromInfo(response.body) : std::string{};
         });
+        if (!cfg.previewShared())
+        {
+            api.setMediamtxProcess([&mediamtx] { return mwm::ProcessState{mediamtx.running(), mediamtx.restarts()}; });
+        }
         api.setNmosSummary([&] { return nmos.summary(); });
         mwm::HttpServer server;
         server.setHandler([&](mwm::HttpRequest const& request) { return api.handle(request); });
@@ -224,9 +253,9 @@ int main(int argc, char** argv)
             auto const now = std::chrono::steady_clock::now();
             if (now >= nextPoll)
             {
-                auto const current = store->get();
-                refreshViewers(current, *book);
-                refreshLabels(current, *book);
+                // The MediaMTX API and the path prefix of the start; the registry may change.
+                refreshViewers(cfg, *book);
+                refreshLabels(store->get(), *book);
                 nextPoll = now + std::chrono::seconds(1);
             }
             if (now >= nextBroadcast)
@@ -245,6 +274,7 @@ int main(int argc, char** argv)
         nmos.stop();
         tsl.stop();
         server.stop();
+        mediamtx.stop();
         ::alarm(0);
         return 143;
     }

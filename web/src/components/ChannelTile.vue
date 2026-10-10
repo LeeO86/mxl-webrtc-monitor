@@ -3,6 +3,7 @@
 // the monitored pair, mute, and the stream's viewers. A click on the picture shows it full size.
 // TSL tally: the left lamp shows LH, the right lamp RH, the picture's border the text tally, else RH,
 // else LH; with tally_text the label sits on the text tally colour.
+// As a widget (/widget/channel) it fills its frame: title (labels), picture and meters, nothing else.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import Meters from "./Meters.vue";
 import Pill from "./Pill.vue";
@@ -13,6 +14,9 @@ import { tslEnabled } from "../store.js";
 const props = defineProps({
   channel: { type: Object, required: true },
   expanded: { type: Boolean, default: false },
+  widget: { type: Boolean, default: false },
+  labels: { type: Boolean, default: true },
+  meters: { type: Boolean, default: true },
 });
 defineEmits(["toggle"]);
 
@@ -67,8 +71,8 @@ const tallyTitle = computed(() => {
 </script>
 
 <template>
-  <div class="panel tile" :class="{ expanded }">
-    <h3>
+  <div class="panel tile" :class="{ widget, expanded }">
+    <h3 v-if="labels">
       <span v-if="tslEnabled" class="lamp" :class="tallyClass(c.tsl_lh)" :title="tallyTitle"></span>
       <span class="idx">{{ c.index }}</span>
       <span class="name" :class="c.tally_text && tallyClass(c.tsl_text_tally)" :title="`Channel ${c.index}: ${c.video_label} / ${c.audio_label}`">{{ c.video_label }}</span>
@@ -76,23 +80,26 @@ const tallyTitle = computed(() => {
       <span class="state-tag" :class="c.video.state">{{ STATE_TEXT[c.video.state] || c.video.state }}</span>
       <span v-if="tslEnabled" class="lamp" :class="tallyClass(c.tsl_rh)" :title="tallyTitle"></span>
     </h3>
-    <div class="picture" :class="tallyClass(c.tally)" :title="expanded ? 'Back to the grid' : 'Full size'" @click="$emit('toggle')">
+    <div class="picture" :class="tallyClass(c.tally)" :title="widget ? undefined : expanded ? 'Back to the grid' : 'Full size'" @click="widget || $emit('toggle')">
       <video ref="video" autoplay playsinline muted></video>
-      <span v-if="mode === 'blocked'" class="ov bl hint">Playback blocked on https: set MONITOR_WHEP_PUBLIC_URL and MONITOR_HLS_PUBLIC_URL.</span>
+      <span v-if="mode === 'blocked'" class="ov bl hint">Playback blocked on https: set PREVIEW_WHEP_URL and PREVIEW_HLS_URL.</span>
     </div>
-    <div class="srcline" :title="source">{{ source }}</div>
-    <div class="statusline">
-      <button class="btn small" :class="{ secondary: muted }" :aria-pressed="!muted" :title="muted ? 'Listen to this channel' : 'Mute'" @click="toggleMute">
-        {{ muted ? "Unmute" : "Mute" }}
-      </button>
-      <Meters :peaks="c.meters.peak_dbfs" :rms="c.meters.rms_dbfs" :selected="pairChannels(c.audio_pair)" :label="`${c.audio_label} levels`" />
-    </div>
-    <div class="statusline">
-      <span :class="{ warn: stateKind(c.audio.state) === 'warn' }">{{ audioText }}</span>
-      <span>{{ c.encoder || "–" }} · {{ c.preview_height }}p</span>
-      <span :title="`${c.viewers.webrtc} WebRTC, ${c.viewers.hls} HLS`">viewers {{ c.viewers.webrtc + c.viewers.hls }}</span>
-      <span class="spacer"></span>
-      <Pill :text="MODES[mode].text" :kind="MODES[mode].kind" title="what this page plays" />
-    </div>
+    <template v-if="!widget">
+      <div class="srcline" :title="source">{{ source }}</div>
+      <div class="statusline">
+        <button class="btn small" :class="{ secondary: muted }" :aria-pressed="!muted" :title="muted ? 'Listen to this channel' : 'Mute'" @click="toggleMute">
+          {{ muted ? "Unmute" : "Mute" }}
+        </button>
+        <Meters :peaks="c.meters.peak_dbfs" :rms="c.meters.rms_dbfs" :selected="pairChannels(c.audio_pair)" :label="`${c.audio_label} levels`" />
+      </div>
+      <div class="statusline">
+        <span :class="{ warn: stateKind(c.audio.state) === 'warn' }">{{ audioText }}</span>
+        <span>{{ c.encoder || "–" }} · {{ c.preview_height }}p</span>
+        <span :title="`${c.viewers.webrtc} WebRTC, ${c.viewers.hls} HLS`">viewers {{ c.viewers.webrtc + c.viewers.hls }}</span>
+        <span class="spacer"></span>
+        <Pill :text="MODES[mode].text" :kind="MODES[mode].kind" title="what this page plays" />
+      </div>
+    </template>
+    <Meters v-else-if="meters" :peaks="c.meters.peak_dbfs" :rms="c.meters.rms_dbfs" :selected="pairChannels(c.audio_pair)" :label="`${c.audio_label} levels`" />
   </div>
 </template>

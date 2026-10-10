@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Integration: route a v210 + float32 flow, check HLS, TSL tally over UDP and TCP, no_signal, then waiting→running.
+# Integration: route a v210 + float32 flow, check HLS, TSL tally over UDP and TCP, no_signal, then waiting→running,
+# the widget routes, all with the built-in MediaMTX (own mode); then a second run publishing to a separate MediaMTX
+# (shared mode).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -23,6 +25,9 @@ WHEP_PORT="${WHEP_PORT:-18889}"
 ICE_PORT="${ICE_PORT:-18189}"
 TSL_UDP_PORT="${TSL_UDP_PORT:-18912}"
 TSL_TCP_PORT="${TSL_TCP_PORT:-18913}"
+SHARED_RTSP_PORT="${SHARED_RTSP_PORT:-28554}"
+SHARED_HLS_PORT="${SHARED_HLS_PORT:-28888}"
+SHARED_API_PORT="${SHARED_API_PORT:-29997}"
 PIDS=()
 
 cleanup() {
@@ -46,6 +51,8 @@ if [[ ! -x "$BIN" || ! -x "$WRITER" || ! -x "$MEDIAMTX" ]]; then
 fi
 
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:/opt/mxl/lib"
+# Own mode: the monitor starts `mediamtx` from PATH (the image has it in /usr/local/bin).
+export PATH="$(dirname "$MEDIAMTX"):$PATH"
 
 python3 "$ROOT/tests/integration/fake_registry.py" "$REG_PORT" "$((REG_PORT + 1))" >"$WORKDIR/registry.log" 2>&1 &
 PIDS+=($!)
@@ -64,7 +71,7 @@ export NMOS_REGISTRY_PORT="$REG_PORT"
 export NMOS_DNS_SD=false
 export NMOS_PORT="$NMOS_PORT"
 export WEB_PORT="$WEB_PORT"
-export MEDIAMTX_RTSP_URL="rtsp://127.0.0.1:${RTSP_PORT}"
+export MEDIAMTX_RTSP_PORT="$RTSP_PORT"
 export MEDIAMTX_API_URL="http://127.0.0.1:${API_PORT}"
 export MEDIAMTX_CONFIG_PATH="$WORKDIR/mediamtx.yml"
 export MEDIAMTX_WHEP_PORT="$WHEP_PORT"
@@ -74,7 +81,7 @@ export ENCODER=x264
 export MONITOR_PREVIEW_HEIGHT=270
 export MONITOR_VIDEO_BITRATE_KBPS=800
 unset MONITOR_PUBLIC_IP || true
-export MONITOR_HLS_PUBLIC_URL="http://127.0.0.1:${HLS_PORT}"
+export PREVIEW_HLS_URL="http://127.0.0.1:${HLS_PORT}"
 export LOG_LEVEL=info
 export READ_OFFSET_GRAINS=1
 export STATE_DIR="$WORKDIR/state"
@@ -89,15 +96,6 @@ printf '%s\n' '{"id":"11111111-1111-4111-8111-111111111111"}' >"$WORKDIR/mxl/dec
 "$BIN" >"$WORKDIR/monitor.log" 2>&1 &
 MONITOR_PID=$!
 PIDS+=("$MONITOR_PID")
-
-for _ in $(seq 1 50); do
-  if [[ -f "$WORKDIR/mediamtx.yml" ]]; then
-    break
-  fi
-  sleep 0.1
-done
-"$MEDIAMTX" "$WORKDIR/mediamtx.yml" >"$WORKDIR/mediamtx.log" 2>&1 &
-PIDS+=($!)
 
 wait_http() {
   local url="$1"
@@ -159,19 +157,19 @@ HLS_INDEX="$(python3 -c '
 import json, sys
 playback = json.loads(sys.argv[1])["channels"][0]["playback"]
 base = sys.argv[2]
-if playback["hls"] != base + "/ch1/index.m3u8":
+if playback["hls"] != base + "/mxl-webrtc-monitor/ch1/index.m3u8":
     raise SystemExit("hls url %s" % playback["hls"])
 if playback["public"]["hls"] is not True or playback["public"]["whep"] is not False:
     raise SystemExit("public flags %s" % playback["public"])
 whep = playback["whep"]
-suffix = ":%s/ch1/whep" % sys.argv[3]
+suffix = ":%s/mxl-webrtc-monitor/ch1/whep" % sys.argv[3]
 if not whep.startswith("http://") or not whep.endswith(suffix):
     raise SystemExit("whep url %s" % whep)
 host = whep[len("http://"):-len(suffix)]
 if host in ("127.0.0.1", "0.0.0.0") or any(c.isalpha() for c in host):
     raise SystemExit("whep url %s" % whep)
 print(playback["hls"])
-' "$channels_json" "$MONITOR_HLS_PUBLIC_URL" "$WHEP_PORT")"
+' "$channels_json" "$PREVIEW_HLS_URL" "$WHEP_PORT")"
 echo "hls public url $HLS_INDEX"
 
 hls_has_segments() {
@@ -214,6 +212,43 @@ if [[ "$mtx" != "ok" ]]; then
   exit 1
 fi
 echo "mediamtx path ready"
+
+# [mode, built-in MediaMTX running (or "-"), channel 1 publish state] from /statusz.
+preview_status() {
+  curl -sf "$1/statusz" | python3 -c 'import json,sys; p=json.load(sys.stdin)["preview"]; print(p["mode"], p.get("mediamtx", {}).get("running", "-"), p["streams"][0]["state"])'
+}
+wait_preview() {
+  local base="$1" want="$2" got=""
+  for _ in $(seq 1 80); do
+    got="$(preview_status "$base" || true)"
+    if [[ "$got" == "$want" ]]; then
+      echo "preview $got"
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "preview: wanted '$want', got '$got'" >&2
+  curl -sS "$base/statusz" >&2 || true
+  return 1
+}
+wait_preview "http://127.0.0.1:${WEB_PORT}" "own True publishing"
+grep -q '"event":"mediamtx_started"' "$WORKDIR/monitor.log"
+
+# Widgets: the list, the page with its frame policy, and a channel that does not exist.
+curl -sf "http://127.0.0.1:${WEB_PORT}/widgets" | python3 -c '
+import json, sys
+w = json.load(sys.stdin)[0]
+assert w["id"] == "channel" and w["params"]["properties"]["ch"]["maximum"] == 1 and w["min_size"] == {"w": 320, "h": 200}, w
+'
+headers="$(curl -sf -D - -o "$WORKDIR/widget.html" "http://127.0.0.1:${WEB_PORT}/widget/channel?ch=1&meters=false&theme=transparent")"
+grep -qi "^Content-Security-Policy: frame-ancestors 'self'" <<<"$headers"
+grep -q '<div id="app">' "$WORKDIR/widget.html"
+code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${WEB_PORT}/widget/channel?ch=2")"
+if [[ "$code" != "400" ]]; then
+  echo "widget ch=2: $code" >&2
+  exit 1
+fi
+echo "widgets ok"
 
 # TSL 5.0, bytes from the platform's reference codec (tsl5.py). Display 0 is channel 1.
 send_tsl() {
@@ -319,6 +354,106 @@ if [[ -z "$gone" ]]; then
 fi
 if [[ ! -f "$WORKDIR/mxl/decoy-other/domain_def.json" ]]; then
   echo "cleanup removed a domain this monitor does not own" >&2
+  exit 1
+fi
+# The built-in MediaMTX ended with the monitor.
+if curl -s -o /dev/null "http://127.0.0.1:${API_PORT}/v3/paths/list"; then
+  echo "built-in MediaMTX still answers after the monitor exited" >&2
+  exit 1
+fi
+echo "own mode ok"
+
+# Shared mode: a separate MediaMTX stands in for the platform's. The monitor publishes there under
+# PREVIEW_PATH_PREFIX and starts no MediaMTX. Channel 1 keeps its route from is05.json.
+cat >"$WORKDIR/shared.yml" <<EOF
+logLevel: info
+api: true
+apiAddress: 127.0.0.1:${SHARED_API_PORT}
+metrics: false
+rtsp: true
+rtspAddress: 127.0.0.1:${SHARED_RTSP_PORT}
+rtspTransports: [tcp]
+rtmp: false
+hls: true
+hlsAddress: 127.0.0.1:${SHARED_HLS_PORT}
+hlsVariant: lowLatency
+hlsAlwaysRemux: true
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+webrtc: false
+srt: false
+pathDefaults:
+  source: publisher
+paths:
+  all_others:
+EOF
+start_shared() {
+  "$MEDIAMTX" "$WORKDIR/shared.yml" >>"$WORKDIR/shared-mediamtx.log" 2>&1 &
+  SHARED_PID=$!
+  PIDS+=("$SHARED_PID")
+}
+start_shared
+mkdir -p "$WORKDIR/state-shared"
+cp "$STATE_DIR/is05.json" "$WORKDIR/state-shared/"
+SHARED_WEB="http://127.0.0.1:$((WEB_PORT + 1))"
+WEB_PORT=$((WEB_PORT + 1)) NMOS_ENABLE=false TSL_ENABLE=false STATE_DIR="$WORKDIR/state-shared" MEDIAMTX_CONFIG_PATH="$WORKDIR/state-shared/mediamtx.yml" \
+  PREVIEW_PUBLISH_URL="rtsp://127.0.0.1:${SHARED_RTSP_PORT}" PREVIEW_PATH_PREFIX=test-all/mon PREVIEW_HLS_URL="http://127.0.0.1:${SHARED_HLS_PORT}" \
+  MEDIAMTX_API_URL="http://127.0.0.1:${SHARED_API_PORT}" "$BIN" >"$WORKDIR/monitor-shared.log" 2>&1 &
+MONITOR_PID=$!
+PIDS+=("$MONITOR_PID")
+wait_http "$SHARED_WEB/livez"
+wait_preview "$SHARED_WEB" "shared - publishing"
+if grep -q '"event":"mediamtx_started"' "$WORKDIR/monitor-shared.log"; then
+  echo "shared mode started a MediaMTX" >&2
+  exit 1
+fi
+HLS_INDEX="$(curl -sf "$SHARED_WEB/api/v1/channels" | python3 -c 'import json,sys; print(json.load(sys.stdin)["channels"][0]["playback"]["hls"])')"
+if [[ "$HLS_INDEX" != "http://127.0.0.1:${SHARED_HLS_PORT}/test-all/mon/ch1/index.m3u8" ]]; then
+  echo "shared hls url $HLS_INDEX" >&2
+  exit 1
+fi
+for _ in $(seq 1 40); do
+  if hls_has_segments; then
+    break
+  fi
+  sleep 0.5
+done
+hls_has_segments
+echo "shared hls playlist has segments"
+# The shared MediaMTX's API (set here) gives the path state under the prefix.
+mtx=""
+for _ in $(seq 1 20); do
+  mtx="$(curl -sf "$SHARED_WEB/api/v1/channels" | python3 -c 'import json,sys; m=json.load(sys.stdin)["channels"][0]["mediamtx"]; print("ok" if m["ready"] and "H264" in m["tracks"] else m)')"
+  if [[ "$mtx" == "ok" ]]; then
+    break
+  fi
+  sleep 0.5
+done
+if [[ "$mtx" != "ok" ]]; then
+  echo "shared mediamtx path state: $mtx" >&2
+  exit 1
+fi
+ready="$(curl -s -o /dev/null -w '%{http_code}' "$SHARED_WEB/readyz" || true)"
+if [[ "$ready" != "200" ]]; then
+  echo "shared readyz=$ready" >&2
+  exit 1
+fi
+curl -sf "$SHARED_WEB/metrics" | grep -q '^mxl_webrtc_monitor_preview_mode{mode="shared"} 1$'
+# The shared MediaMTX goes away and comes back: the publish state follows.
+kill "$SHARED_PID"
+wait "$SHARED_PID" 2>/dev/null || true
+wait_preview "$SHARED_WEB" "shared - error"
+start_shared
+wait_preview "$SHARED_WEB" "shared - publishing"
+
+kill -TERM "$MONITOR_PID"
+set +e
+wait "$MONITOR_PID"
+status=$?
+set -e
+if [[ "$status" != "143" ]]; then
+  echo "shared shutdown exit $status" >&2
+  tail -n 80 "$WORKDIR/monitor-shared.log" >&2 || true
   exit 1
 fi
 echo "integration ok"

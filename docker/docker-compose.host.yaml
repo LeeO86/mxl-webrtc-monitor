@@ -1,29 +1,20 @@
 # One host of a real platform. The MXL root is the shared tmpfs, read-only here.
 # Set NMOS_REGISTRY_ADDRESS to the facility registry. A second monitor on the same
-# host needs different WEB_PORT, NMOS_PORT, and MediaMTX ports.
+# host needs different WEB_PORT, NMOS_PORT, and MediaMTX ports. The monitor runs its
+# built-in MediaMTX unless PREVIEW_PUBLISH_URL names a shared one.
 
 services:
-  mediamtx:
-    image: bluenviron/mediamtx:1.20.1
-    network_mode: host
-    volumes:
-      - mtx-config:/config
-    # The image has no shell. MediaMTX exits until the monitor has written its
-    # config, and the restart policy starts it again.
-    command: ["/config/mediamtx.yml"]
-    restart: unless-stopped
-
   # The monitor runs as uid 1000 and its image has no /config: a new named volume is owned by
   # root and the monitor exits 75 (cannot write mediamtx.yml). This one-shot gives it to uid 1000.
   config-owner:
-    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.2.0
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.3.0
     user: "0:0"
     entrypoint: ["chown", "1000:1000", "/config"]
     volumes:
       - mtx-config:/config
 
   monitor:
-    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.2.0
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.3.0
     network_mode: host
     depends_on:
       config-owner:
@@ -44,6 +35,10 @@ services:
       MXL_CLEANUP_ON_EXIT: "true"
       ENCODER: ${ENCODER:-auto}
       MONITOR_CHANNELS: ${MONITOR_CHANNELS:-4}
+      PREVIEW_PUBLISH_URL: ${PREVIEW_PUBLISH_URL:-}
+      PREVIEW_PATH_PREFIX: ${PREVIEW_PATH_PREFIX:-}
+      PREVIEW_WHEP_URL: ${PREVIEW_WHEP_URL:-}
+      PREVIEW_HLS_URL: ${PREVIEW_HLS_URL:-}
     volumes:
       - /Volumes/mxl:/Volumes/mxl:ro
       - mtx-config:/config

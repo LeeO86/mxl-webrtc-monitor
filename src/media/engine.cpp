@@ -317,6 +317,7 @@ private:
         pipeline_ = nullptr;
         pipeSig_.clear();
         pipeAudio_ = false;
+        sinkBuffers_.store(0);
         videoFrames_ = 0;
         audioSamplesPushed_ = 0;
     }
@@ -411,7 +412,7 @@ private:
             launch += "x264enc name=enc tune=zerolatency speed-preset=ultrafast bitrate=" + std::to_string(settings.video_bitrate_kbps) +
                       " key-int-max=" + std::to_string(gop) + " bframes=0 byte-stream=true aud=true option-string=scenecut=0 ! ";
         }
-        launch += "h264parse config-interval=-1 ! queue ! rtspclientsink name=sink location=\"" + cfg_.mediamtx_rtsp_url + "/ch" + std::to_string(index_) +
+        launch += "h264parse config-interval=-1 ! queue name=pubq ! rtspclientsink name=sink location=\"" + cfg_.publishUrl() + "/" + cfg_.streamPath(index_) +
                   "\" protocols=tcp latency=0 ";
         if (withAudio)
         {
@@ -434,6 +435,7 @@ private:
                 pipeline_ = nullptr;
             }
             log::warn("pipeline_build_failed", {{"channel", std::to_string(index_)}, {"encoder", encoder}, {"error", message}});
+            publishError_ = message;
             if (encoder == "nvenc")
             {
                 wantX264_ = true;
@@ -456,6 +458,19 @@ private:
                 gst_object_unref(pad);
             }
             gst_object_unref(encoderElement);
+        }
+        // rtspclientsink holds the first buffer until the server took ANNOUNCE, SETUP and RECORD, so
+        // buffers that pass this queue mean the stream is published.
+        sinkBuffers_.store(0);
+        if (auto* queue = gst_bin_get_by_name(GST_BIN(pipeline_), "pubq"))
+        {
+            auto* pad = gst_element_get_static_pad(queue, "src");
+            if (pad != nullptr)
+            {
+                gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, &Slot::onPublished, this, nullptr);
+                gst_object_unref(pad);
+            }
+            gst_object_unref(queue);
         }
         std::string caps = std::string("video/x-raw,format=") + (previewNv12_ ? "NV12" : "I420") + ",width=" + std::to_string(previewW_) +
                            ",height=" + std::to_string(previewH_) + ",framerate=" + std::to_string(format.rateNum) + "/" + std::to_string(format.rateDen) +
@@ -505,6 +520,7 @@ private:
         if (ret == GST_STATE_CHANGE_FAILURE)
         {
             log::warn("pipeline_state_failed", {{"channel", std::to_string(index_)}, {"encoder", encoder}});
+            publishError_ = "pipeline did not start";
             if (encoder == "nvenc")
             {
                 wantX264_ = true;
@@ -550,6 +566,7 @@ private:
                 gchar* debug = nullptr;
                 gst_message_parse_error(message, &error, &debug);
                 log::warn("pipeline_bus_error", {{"channel", std::to_string(index_)}, {"error", error != nullptr ? error->message : ""}, {"debug", debug != nullptr ? debug : ""}});
+                publishError_ = error != nullptr ? error->message : "pipeline error";
                 // An NVENC session can also fail after PLAYING (caps negotiation).
                 // Rebuild that channel with x264 instead of retrying NVENC.
                 if (std::strcmp(GST_OBJECT_NAME(GST_MESSAGE_SRC(message)), "enc") == 0)
@@ -599,6 +616,12 @@ private:
                 }
             }
         }
+        return GST_PAD_PROBE_OK;
+    }
+
+    static GstPadProbeReturn onPublished(GstPad*, GstPadProbeInfo*, gpointer user)
+    {
+        static_cast<Slot*>(user)->sinkBuffers_.fetch_add(1);
         return GST_PAD_PROBE_OK;
     }
 
@@ -778,6 +801,13 @@ private:
             }
         }
         book_.setCounters(index_, grainsRead_.load(), droppedQueue_.load(), droppedLate_.load(), resyncs_.load(), lag, fps, bitrate);
+        // One or two buffers pass before the RTSP sink blocks for its RECORD; more mean it publishes.
+        bool const publishing = sinkBuffers_.load() >= 3;
+        if (publishing)
+        {
+            publishError_.clear();
+        }
+        book_.setPublish(index_, publishing ? "publishing" : publishError_.empty() ? "connecting" : "error", publishError_);
     }
 
     void videoLoop()
@@ -1199,6 +1229,8 @@ private:
     bool pipeAudio_ = false;
     bool wantX264_ = false;
     std::atomic<bool> pipeBroken_{false};
+    std::atomic<std::uint64_t> sinkBuffers_{0}; // buffers into the RTSP sink since the pipeline was built
+    std::string publishError_;                  // video thread only
     VideoFormat videoFormat_{};
     std::uint64_t videoFrames_ = 0;
     std::uint64_t audioSamplesPushed_ = 0;

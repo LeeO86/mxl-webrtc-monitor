@@ -16,8 +16,9 @@ MXL flows in a web browser. It exposes N monitor channels as NMOS BCP-007-03 MXL
 receivers. A controller (e.g. the Qvest NMOS crosspoint) routes any MXL sender to
 a channel with ordinary IS-05. The container reads the flow from the local MXL
 domain, encodes a low-bitrate preview, and serves it via WebRTC (WHEP) with HLS as
-a fallback, through a mediamtx sidecar. A built-in web page shows all channels as a
-multiviewer grid with labels, status and audio meters.
+a fallback, through MediaMTX: its own, built into the image, or a platform's shared one
+(§5.7). A built-in web page shows all channels as a multiviewer grid with labels, status
+and audio meters; one channel can be embedded in an operator screen (§6.6).
 
 Because each channel is a real NMOS receiver, `mxl-fabrics-agent` sees the
 subscription and replicates a flow from another host automatically. The monitor
@@ -54,20 +55,23 @@ routing from within the monitor's own UI.
 │                                                 rtspclientsink ◄─┘│
 │  web server: UI, REST, WebSocket (status, meters), /metrics       │
 └───────────────────────────────┬──────────────────────────────────┘
-                                │ RTSP on localhost (one path per channel)
+                                │ RTSP (one path per channel: <prefix>/ch<n>)
 ┌───────────────────────────────▼──────────────────────────────────┐
-│ mediamtx sidecar: WHEP (WebRTC), HLS (low-latency), metrics, API  │
+│ MediaMTX: WHEP (WebRTC), HLS (low-latency), metrics, API          │
+│  own: a child process of the monitor (binary in the image)        │
+│  shared: the platform's, PREVIEW_PUBLISH_URL                       │
 └──────────────────────────────────────────────────────────────────┘
                                 │
                              browser
 ```
 
-- One container for the application, one for mediamtx (official image, pinned).
-  In Kubernetes both run in the same pod; in Compose as two services sharing the
-  host network.
-- The application owns the mediamtx configuration file (generated on start into a
-  shared volume) and uses the mediamtx API on localhost for viewer counts and
-  path state.
+- One container. In own mode (§5.7) the application starts the MediaMTX binary of
+  the image (official release, pinned) as a supervised child process; in shared
+  mode it publishes to a MediaMTX it does not start. 1.0 to 1.2 ran MediaMTX as a
+  sidecar container in the same pod or Compose project.
+- The application owns the MediaMTX configuration file (generated on start) and uses
+  the MediaMTX API for viewer counts and path state (own mode; shared mode when
+  `MEDIAMTX_API_URL` is set).
 
 ---
 
@@ -93,7 +97,8 @@ routing from within the monitor's own UI.
   is behind a corporate proxy).
 - Base image: Ubuntu 24.04. GPU support via the NVIDIA container runtime; the image
   MUST start and work without a GPU (CPU encoding).
-- mediamtx: `bluenviron/mediamtx` official image, exact version pinned.
+- MediaMTX: the `/mediamtx` binary (and its MIT `LICENSE`) of the official
+  `bluenviron/mediamtx` image, exact version pinned, copied into this image.
 - Tests: doctest (vendored), shell integration tests.
 - Follow the actual headers of the pinned MXL and nmos-cpp versions; record every
   deviation from this spec in `IMPLEMENTATION_PLAN.md`.
@@ -233,9 +238,10 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
 
 ### 5.6 Delivery
 
-- Each channel publishes to mediamtx on localhost via RTSP, path `ch<n>`.
-- mediamtx serves:
-  - WebRTC via WHEP (`/ch<n>/whep`), single UDP port for ICE plus TCP ICE fallback,
+- Each channel publishes to MediaMTX via RTSP over TCP, path `<PREVIEW_PATH_PREFIX>/ch<n>`
+  (§5.7): the built-in one on localhost, or a shared one.
+- The built-in MediaMTX serves:
+  - WebRTC via WHEP (`/<prefix>/ch<n>/whep`), single UDP port for ICE plus TCP ICE fallback,
     `webrtcAdditionalHosts` set to the node's management IP (`MONITOR_PUBLIC_IP`);
   - low-latency HLS (fMP4) as fallback;
   - metrics and API, API bound to localhost.
@@ -243,6 +249,40 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
   the fallback; if not, add an AAC track for HLS and record the decision.
 - No TURN server in v1. The README documents that browsers need UDP to the node for
   WebRTC and that HLS works over TCP when UDP is blocked.
+
+### 5.7 Preview contract (1.3.0, platform §11.5 / D-185)
+
+The platform runs one shared MediaMTX; outside the platform the monitor stays
+self-contained. The same settings exist in every repo with browser previews.
+
+- `PREVIEW_PUBLISH_URL` (alias `MEDIAMTX_RTSP_URL`): an `rtsp://` or `rtsps://` base
+  without path or credentials. Set: **shared mode**, the channels publish there and
+  this process starts no MediaMTX. Empty (default): **own mode**, the process starts
+  the image's MediaMTX as a child process (own process group, SIGTERM when the
+  monitor dies) with the generated config, restarts it after it exits (1 s, doubling
+  to 10 s; 1 s again after 10 s of running), and stops it on shutdown (SIGTERM, then
+  SIGKILL after 3 s). Its RTSP ingest is `127.0.0.1:MEDIAMTX_RTSP_PORT`.
+- `PREVIEW_PATH_PREFIX`: MediaMTX path segments (`[A-Za-z0-9._~-]`, joined by `/`;
+  outer slashes are dropped). Default `mxl-webrtc-monitor`, the function's own name.
+  Channel `n` publishes `<prefix>/ch<n>`.
+- `PREVIEW_WHEP_URL` / `PREVIEW_HLS_URL` (aliases `MONITOR_WHEP_PUBLIC_URL` /
+  `MONITOR_HLS_PUBLIC_URL`): the public bases the page plays from,
+  `<base>/<prefix>/ch<n>/whep` and `<base>/<prefix>/ch<n>/index.m3u8`. Empty: the own
+  MediaMTX on `MONITOR_PUBLIC_IP` and `MEDIAMTX_WHEP_PORT` / `MEDIAMTX_HLS_PORT`, with
+  the hostname replaced by the page's (§7.1).
+- Aliases are resolved in each configuration layer before the layers are merged; a
+  set (not empty) new name wins over its alias. The configuration API and the export
+  show only the new names.
+- `MEDIAMTX_API_URL` defaults to `http://127.0.0.1:9997` in own mode and is empty in
+  shared mode; when set it gives viewers and path state. `/readyz` needs the MediaMTX
+  API only in own mode.
+- The config file is written in both modes, so a 1.2.0 sidecar deployment (which
+  sets `MEDIAMTX_RTSP_URL`) keeps working in shared mode.
+- Publish state per channel: `connecting` until the RTSP sink passes media,
+  `publishing` once MediaMTX took ANNOUNCE, SETUP and RECORD and buffers flow (more
+  than two buffers through the sink since the stream was built), `error` after a
+  pipeline error, with that error, until it publishes again. `/statusz`, the channel
+  status and the metrics (§8) show the mode and these states.
 
 ---
 
@@ -287,6 +327,8 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
 | GET | `/api/v1/config/export` | one JSON document of settings and channel keys |
 | POST | `/api/v1/config/import` | restore that document into `MONITOR_CONFIG_FILE` |
 | GET | `/api/v1/nmos` | node id, registry and receiver state |
+| GET | `/widgets` | the operator-screen widgets (§6.6) |
+| GET | `/widget/channel?ch=<n>` | one channel as a widget page (§6.6) |
 
 Routing is only via IS-05. The UI MUST NOT offer a source picker in v1.
 
@@ -297,10 +339,15 @@ path) in each channel of `/api/v1/channels` and the events.
 Additions for tally (1.2.0, §6.5): `tally`, `tsl_text`, `tsl_lh`, `tsl_rh`, `tsl_text_tally` and the
 setting `tally_text` in each channel of `/api/v1/channels` and the events; `PATCH` takes `tally_text`.
 
+Additions for previews (1.3.0, §5.7): `preview` (`path`, `state`, `error`) in each channel of
+`/api/v1/channels` and the events; the playback URLs carry the path prefix.
+
 ### 6.4 Ops endpoints
 
 `/livez`, `/readyz` (ready = MXL root mounted, NMOS registered or disabled,
-mediamtx reachable), `/statusz`, `/metrics` — on `WEB_PORT`.
+the built-in MediaMTX reachable in own mode), `/statusz`, `/metrics` — on `WEB_PORT`.
+`/statusz` has `preview`: `mode` (`own` or `shared`), `publish_url`, `path_prefix`, in own
+mode `mediamtx` (`running`, `restarts`), and `streams` (`channel`, `path`, `state`, `error`).
 
 ### 6.5 Tally (TSL UMD 5.0)
 
@@ -332,6 +379,27 @@ The receiver is mxl-multiviewer's (its SPECIFICATION §7, release 1.3.0), withou
   lists the fields. The tally is shown in the page only, not burned into the stream.
 - The `TSL_*` keys are global settings: changed in the UI, they apply after a restart.
 
+### 6.6 Widgets (1.3.0, operator screens)
+
+The contract is agreed with the platform's production designer.
+
+- `GET /widgets` answers `[{id, title, params, min_size: {w, h}, version}]`; `params` is a
+  JSON schema of the widget's query parameters, `version` the monitor version.
+- One widget, `channel`: `params` `ch` (integer, 1..`MONITOR_CHANNELS`, required), `labels`
+  and `meters` (booleans, default true); `min_size` 320×200.
+- `GET /widget/channel?ch=<n>[&labels=][&meters=][&theme=dark|light|transparent]` is a page
+  with only that channel's tile, filling its frame: the WHEP picture (HLS fallback, muted)
+  from the preview contract (§5.7), the title with the channel label and the TSL lamps
+  (`labels`), the tally border and text tally by the rules of §6.5, and the audio meters
+  (`meters`). `theme` forces dark or light colours, or dark colours on a transparent
+  background; without it the page follows the browser. The page uses the monitor's API on
+  its own origin (no CORS). An invalid parameter answers 400, an unknown widget 404.
+- The `/widget` routes carry `Content-Security-Policy: frame-ancestors
+  <WIDGET_FRAME_ANCESTORS>` (default `'self'`) and no `X-Frame-Options`. The value is a CSP
+  source list; `;`, `,` and control characters exit 78.
+- The page posts `{type: "widget-ready"}` once the channel is shown, and
+  `{type: "widget-size", w, h}` then and on every resize, to `window.parent`.
+
 ---
 
 ## 7. Configuration
@@ -360,18 +428,21 @@ that the environment owns. It returns 409 when `MONITOR_CONFIG_FILE` is unset.
 | `ENCODER` | `auto` | `auto`, `nvenc`, `x264` |
 | `MONITOR_PUBLIC_IP` | first non-loopback IPv4 | ICE host (`webrtcAdditionalHosts`) and the default for `NMOS_HOST_ADDRESS`. Must be an IP literal, not loopback and not `0.0.0.0` |
 | `NMOS_HOST_ADDRESS` | `MONITOR_PUBLIC_IP` | IP announced on the IS-04 href, API endpoints and IS-05 control hrefs |
-| `MONITOR_WHEP_PUBLIC_URL` | empty | public base URL of WHEP, no path; empty keeps `http://MONITOR_PUBLIC_IP:MEDIAMTX_WHEP_PORT`. A TLS hostname is allowed here |
-| `MONITOR_HLS_PUBLIC_URL` | empty | public base URL of HLS, no path; empty keeps `http://MONITOR_PUBLIC_IP:MEDIAMTX_HLS_PORT`. A TLS hostname is allowed here |
+| `PREVIEW_PUBLISH_URL` | empty | RTSP base of a shared MediaMTX; empty runs the built-in one (§5.7). Alias `MEDIAMTX_RTSP_URL` |
+| `PREVIEW_PATH_PREFIX` | `mxl-webrtc-monitor` | path prefix of the streams, `<prefix>/ch<n>` |
+| `PREVIEW_WHEP_URL` | empty | public base URL of WHEP, no path; empty keeps `http://MONITOR_PUBLIC_IP:MEDIAMTX_WHEP_PORT`. A TLS hostname is allowed here. Alias `MONITOR_WHEP_PUBLIC_URL` |
+| `PREVIEW_HLS_URL` | empty | public base URL of HLS, no path; empty keeps `http://MONITOR_PUBLIC_IP:MEDIAMTX_HLS_PORT`. A TLS hostname is allowed here. Alias `MONITOR_HLS_PUBLIC_URL` |
+| `WIDGET_FRAME_ANCESTORS` | `'self'` | CSP `frame-ancestors` of the `/widget` routes (§6.6) |
 | `STATE_DIR` | `/config` | directory for generated state (`mediamtx.yml` unless overridden, and `is05.json`) |
 | `SHUTDOWN_TIMEOUT_S` | 10 | seconds allowed after SIGTERM before exit 143 is forced |
 | `MXL_CLEANUP_ON_EXIT` | false | accepted; this monitor owns no output domain, so `true` only logs and deletes nothing |
 | `NMOS_LABEL` | empty | node label; device label prefix. Empty keeps `HOST_ID` and `MXL WebRTC Monitor` |
 | `NMOS_TAGS` | `{}` | JSON object of tag name to array of strings, on the node and device |
-| `MEDIAMTX_RTSP_URL` | `rtsp://127.0.0.1:8554` | sidecar ingest |
-| `MEDIAMTX_API_URL` | `http://127.0.0.1:9997` | sidecar API |
-| `MEDIAMTX_CONFIG_PATH` | `STATE_DIR/mediamtx.yml` | generated config for the sidecar |
+| `MEDIAMTX_RTSP_PORT` | 8554 | RTSP ingest of the built-in MediaMTX on 127.0.0.1 |
+| `MEDIAMTX_API_URL` | `http://127.0.0.1:9997` (shared mode: empty) | MediaMTX API for viewers and path state |
+| `MEDIAMTX_CONFIG_PATH` | `STATE_DIR/mediamtx.yml` | generated MediaMTX config |
 | `MEDIAMTX_WHEP_PORT` / `_HLS_PORT` / `_ICE_UDP_PORT` | 8889 / 8888 / 8189 | written into the generated config |
-| `MEDIAMTX_METRICS_PORT` | API port + 1 | sidecar Prometheus port written into the generated config. `0` means the default |
+| `MEDIAMTX_METRICS_PORT` | API port + 1 | MediaMTX Prometheus port written into the generated config. `0` means the default |
 | `NMOS_ENABLE` | true | |
 | `NMOS_REGISTRY_ADDRESS` / `_PORT` | empty / 3210 | static registration API |
 | `NMOS_QUERY_ADDRESS` / `_PORT` | registry address / registry port + 1 | Query API used for readiness and sender labels |
@@ -394,15 +465,15 @@ documents this.
 ### 7.1 Behind an HTTPS reverse proxy
 
 The UI, WHEP and HLS can each have their own hostname on a TLS proxy that
-only exposes port 443. Set `MONITOR_WHEP_PUBLIC_URL` and
-`MONITOR_HLS_PUBLIC_URL` to those absolute origins, for example
+only exposes port 443. Set `PREVIEW_WHEP_URL` and
+`PREVIEW_HLS_URL` to those absolute origins, for example
 `https://mon1-whep.small.mxl.ipla.media.int` and
 `https://mon1-hls.small.mxl.ipla.media.int`. The channel API then returns
-`<base>/ch<n>/whep` and `<base>/ch<n>/index.m3u8` with `playback.public`
+`<base>/<prefix>/ch<n>/whep` and `<base>/<prefix>/ch<n>/index.m3u8` with `playback.public`
 true, and the page uses those URLs unchanged.
 
-Leave both empty to keep today's URLs,
-`http://<MONITOR_PUBLIC_IP>:<port>/ch<n>/...`. The page then rewrites only
+Leave both empty to keep the direct URLs,
+`http://<MONITOR_PUBLIC_IP>:<port>/<prefix>/ch<n>/...`. The page then rewrites only
 the hostname to the host that served the UI.
 
 ICE does not go through the proxy. `MONITOR_PUBLIC_IP` is still the address
@@ -428,6 +499,8 @@ is not part of v1.
 | `output_bitrate_bps` | gauge | channel |
 | `viewers` | gauge | channel, protocol (webrtc/hls) |
 | `audio_peak_dbfs` | gauge | channel, input_channel (optional, off by default) |
+| `preview_mode` | gauge (1 for the mode) | mode (own/shared) |
+| `preview_publish_state` | gauge (1 for the current state) | channel, state (connecting/publishing/error) |
 
 A Grafana dashboard `deploy/grafana/mxl-webrtc-monitor.json` shows states, lag,
 drops, encode fps and latency, bitrate and viewers. mediamtx's own metrics are
@@ -437,6 +510,7 @@ scraped separately.
 
 ## 9. Container, deployment, CI
 
+- One container: the image carries the MediaMTX binary (§5.7); no sidecar.
 - Runtime requirements: host networking; MXL root mounted read-only; runs as
   `1000:1000` (or `supplementalGroups: [1000]`); GPU optional
   (`runtimeClassName: nvidia`, `nvidia.com/gpu: 1`); no extra capabilities.
@@ -455,12 +529,12 @@ scraped separately.
 - **Docker Compose** (`docker/`):
   - `docker-compose.demo.yaml`: single machine, no GPU required: nmos-cpp
     registry, a test MXL writer (mxl-decklink in mock mode or the CBC
-    `test-generator`), the monitor and mediamtx, Prometheus and Grafana. README
+    `test-generator`), the monitor with its built-in MediaMTX, Prometheus and Grafana. README
     shows routing a flow to channel 1 with `curl` against IS-05 and opening the
     multiviewer.
   - `docker-compose.host.yaml`: one host of a real platform.
 - **Kubernetes** (`deploy/`): Deployment (one replica per node, node-pinned) with
-  the app and mediamtx containers in one pod, ConfigMap, optional GPU, probes,
+  the app container (MediaMTX built in), ConfigMap, optional GPU, probes,
   ServiceMonitor example, Grafana dashboard. Written so `mxl-poc-platform` can
   vendor it.
 
@@ -476,6 +550,12 @@ scraped separately.
   tally colour rule, and the tally fields of the API.
 - Integration also sends a TSL 5.0 packet over UDP and one over TCP and checks the
   tally fields of channel 1.
+- Unit (1.3.0): preview setting precedence and aliases, own and shared mode selection,
+  `/widgets`, the widget route's parameters and CSP header, `/statusz` and the preview
+  metrics, the child-process supervisor. Integration: the run above uses the built-in
+  MediaMTX and checks the widget routes; a second run publishes to a separate MediaMTX
+  (shared mode), fetches HLS there under the path prefix, and follows that MediaMTX
+  going away (`error`) and coming back (`publishing`).
 - Integration (CI, no GPU): a test writer creates a v210 + float32 flow in a temp
   MXL root; a minimal registry stand-in (or nmos-cpp registry container); the test
   PATCHes channel 1, waits for state `running`, then fetches the HLS playlist from

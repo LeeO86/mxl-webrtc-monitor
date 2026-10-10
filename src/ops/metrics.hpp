@@ -24,6 +24,8 @@ private:
     double sum_ = 0;
 };
 
+// previewMode: "own" or "shared" (the mode the process started in).
 std::string renderMetrics(Config const& cfg, std::vector<ChannelView> const& channels, std::string const& mxlVersion, std::string const& gstVersion,
-    std::string const& encoderAvailable, std::vector<LatencyHistogram const*> const& latency, std::vector<std::uint64_t> const& fallbacks);
+    std::string const& encoderAvailable, std::vector<LatencyHistogram const*> const& latency, std::vector<std::uint64_t> const& fallbacks,
+    std::string const& previewMode);
 } // namespace mwm

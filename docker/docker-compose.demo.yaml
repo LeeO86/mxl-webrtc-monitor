@@ -1,6 +1,6 @@
 # Single-machine demo. Host networking so IS-05, WHEP and HLS ports match the defaults.
 # The registry service is the integration stand-in. Point NMOS_REGISTRY_ADDRESS at a
-# real nmos-cpp registry to use one instead.
+# real nmos-cpp registry to use one instead. The monitor runs its built-in MediaMTX.
 
 services:
   registry:
@@ -11,7 +11,7 @@ services:
     command: ["python", "/fake_registry.py", "3210", "3211"]
 
   writer:
-    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.2.0
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.3.0
     network_mode: host
     user: "0:0"
     entrypoint: ["/usr/local/bin/mxl-flow-writer"]
@@ -27,27 +27,17 @@ services:
     volumes:
       - /dev/shm:/dev/shm
 
-  mediamtx:
-    image: bluenviron/mediamtx:1.20.1
-    network_mode: host
-    volumes:
-      - mtx-config:/config
-    # The image has no shell. MediaMTX exits until the monitor has written its
-    # config, and the restart policy starts it again.
-    command: ["/config/mediamtx.yml"]
-    restart: unless-stopped
-
   # The monitor runs as uid 1000 and its image has no /config: a new named volume is owned by
   # root and the monitor exits 75 (cannot write mediamtx.yml). This one-shot gives it to uid 1000.
   config-owner:
-    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.2.0
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.3.0
     user: "0:0"
     entrypoint: ["chown", "1000:1000", "/config"]
     volumes:
       - mtx-config:/config
 
   monitor:
-    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.2.0
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.3.0
     network_mode: host
     depends_on:
       registry:
@@ -66,10 +56,8 @@ services:
       NMOS_PORT: "3242"
       WEB_PORT: "8100"
       MEDIAMTX_CONFIG_PATH: /config/mediamtx.yml
-      MEDIAMTX_RTSP_URL: rtsp://127.0.0.1:8554
-      MEDIAMTX_API_URL: http://127.0.0.1:9997
-      MONITOR_WHEP_PUBLIC_URL: http://127.0.0.1:8889
-      MONITOR_HLS_PUBLIC_URL: http://127.0.0.1:8888
+      PREVIEW_WHEP_URL: http://127.0.0.1:8889
+      PREVIEW_HLS_URL: http://127.0.0.1:8888
       STATE_DIR: /config
       SHUTDOWN_TIMEOUT_S: "10"
       MXL_CLEANUP_ON_EXIT: "true"
