@@ -14,8 +14,8 @@
 //    sample position: the sum of the luma before x is at block*48 + (x % 6)*8 + the lane of
 //    its group;
 //  - the prefix sums at the column starts are picked from there with permutes (no gather
-//    instructions: with the Downfall/GDS microcode they are slow on Intel up to Ice Lake,
-//    and they are slow on AMD Zen 2), and 8 columns are divided at a time;
+//    instructions: with the Downfall/GDS microcode they are slow on Intel up to Ice Lake),
+//    and 8 columns are divided at a time;
 //  - the chroma of an output row pair is summed once over the source lines of both rows (the
 //    scalar code adds the two rows' column sums: the same total).
 
@@ -248,8 +248,8 @@ MWM_AVX2 void prefixPair(std::uint8_t const* const* lines, std::size_t const* fi
 // Where the prefix sums at the column starts are. Job v fills q[8v..8v+7] from a row's table,
 // from the blocks at and after `base` (a column start of the next block needs a second
 // vector). Each pick permutes one table vector (at `offset` from base: block*48 + j*8); its
-// lane holds the group to take, with the sign bit set for the lanes it fills. Jobs whose
-// column starts sit at the same places share their picks.
+// lane holds the lane of the group to take (kLane), with the sign bit set for the lanes it
+// fills. Jobs whose column starts sit at the same places share their picks.
 struct Pick
 {
     std::int32_t offset = 0;
