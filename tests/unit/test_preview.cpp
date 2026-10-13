@@ -9,6 +9,7 @@
 #include "ops/mediamtx.hpp"
 #include "ops/metrics.hpp"
 #include "util/jsonutil.hpp"
+#include "version.hpp"
 
 #include <chrono>
 #include <memory>
@@ -188,6 +189,7 @@ TEST_CASE("status and metrics show the mode and each stream's publish state")
     auto const metrics = mwm::renderMetrics(shared.cfg, shared.book->snapshot(), "mxl", "gst", "x264", {}, {}, "shared");
     CHECK(metrics.find("mxl_webrtc_monitor_preview_mode{mode=\"shared\"} 1\n") != std::string::npos);
     CHECK(metrics.find("mxl_webrtc_monitor_preview_mode{mode=\"own\"} 0\n") != std::string::npos);
+    CHECK(metrics.find("mxl_webrtc_monitor_simd_level{level=\"") != std::string::npos);
     CHECK(metrics.find("mxl_webrtc_monitor_preview_publish_state{channel=\"1\",state=\"publishing\"} 1\n") != std::string::npos);
     CHECK(metrics.find("mxl_webrtc_monitor_preview_publish_state{channel=\"2\",state=\"error\"} 1\n") != std::string::npos);
     CHECK(metrics.find("mxl_webrtc_monitor_preview_publish_state{channel=\"2\",state=\"connecting\"} 0\n") != std::string::npos);
@@ -210,7 +212,7 @@ TEST_CASE("widgets list")
     auto const& widget = list[0].get<picojson::object>();
     CHECK(widget.at("id").get<std::string>() == "channel");
     CHECK(!widget.at("title").get<std::string>().empty());
-    CHECK(widget.at("version").get<std::string>() == "1.3.0");
+    CHECK(widget.at("version").get<std::string>() == mwm::kVersion);
     CHECK(widget.at("min_size").get<picojson::object>().at("w").get<double>() == 320);
     CHECK(widget.at("min_size").get<picojson::object>().at("h").get<double>() == 200);
     auto const& params = widget.at("params").get<picojson::object>();

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(mxl-webrtc-monitor VERSION 1.3.0 LANGUAGES CXX)
+project(mxl-webrtc-monitor VERSION 1.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,6 +32,7 @@ add_library(mwm-core STATIC
     src/ops/mediamtx.cpp
     src/ops/api.cpp
     src/media/v210.cpp
+    src/media/v210_avx2.cpp
     src/tally/tsl.cpp
 )
 target_include_directories(mwm-core PUBLIC src third_party)
@@ -57,6 +58,11 @@ if(MWM_BUILD_TESTS)
     target_include_directories(unit-tests PRIVATE src third_party)
     target_link_libraries(unit-tests PRIVATE mwm-core)
     add_test(NAME unit-tests COMMAND unit-tests)
+
+    # v210ToPreview per frame, scalar against AVX2 (CI prints the runner's numbers).
+    add_executable(mwm-preview-bench tests/tools/preview_bench.cpp)
+    target_include_directories(mwm-preview-bench PRIVATE src)
+    target_link_libraries(mwm-preview-bench PRIVATE mwm-core)
 endif()
 
 find_package(mxl CONFIG)

@@ -81,6 +81,11 @@ jobs:
       - name: Unit tests
         run: ./build/unit-tests
 
+      - name: Preview conversion bench (scalar against AVX2)
+        run: |
+          grep -m1 "model name" /proc/cpuinfo
+          ./build/mwm-preview-bench 1 8
+
       - name: Integration
         run: |
           sudo ldconfig

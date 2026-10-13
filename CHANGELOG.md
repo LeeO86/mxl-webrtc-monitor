@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.0
+
+The preview conversion with AVX2 (plan G). No setting changes are needed; the output is byte for byte the same.
+
+- **AVX2 preview conversion.** `v210ToPreview` (v210 to the encoder's 4:2:0 picture) has an AVX2 version. The image stays plain x86-64 and picks it at start when the CPU has AVX2; otherwise the scalar code runs. Both give the same bytes. Lab Xeon Gold 6136, 1080p50 to 960×540: 3.2–3.5 → 1.2 ms per frame, about 0.1 cores less per channel (README, "Hardware check").
+- `MONITOR_SIMD` (`auto`, `avx2` or `scalar`; default `auto`, environment only) overrides the choice. The start logs it (`"event":"simd"`), `/api/v1/info` has `simd`, and the new metric `mxl_webrtc_monitor_simd_level{level}` is 1.
+- `mwm-preview-bench` (built with the unit tests) times the scalar and the AVX2 conversion; CI prints the runner's numbers.
+- The Compose and Kubernetes examples use the `1.4.0` image.
+
 ## 1.3.0
 
 The platform's shared-preview contract (platform spec §11.5, D-185) and the first operator-screen widget. Backwards compatible: the 1.2.0 setting names stay as aliases.

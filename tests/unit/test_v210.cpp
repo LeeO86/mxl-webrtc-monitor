@@ -3,6 +3,7 @@
 #include "media/v210.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -25,6 +26,33 @@ std::vector<std::uint8_t> solid(int width, int height, int y, int cb, int cr)
     }
     return frame;
 }
+// Sets a preview SIMD level for one scope.
+class LevelGuard
+{
+public:
+    explicit LevelGuard(mwm::PreviewSimd level)
+        : previous_(mwm::previewSimd())
+    {
+        mwm::setPreviewSimd(level);
+    }
+    ~LevelGuard() { mwm::setPreviewSimd(previous_); }
+    LevelGuard(LevelGuard const&) = delete;
+    LevelGuard& operator=(LevelGuard const&) = delete;
+
+private:
+    mwm::PreviewSimd previous_;
+};
+
+// The levels this CPU runs.
+std::vector<mwm::PreviewSimd> levels()
+{
+    if (mwm::cpuHasAvx2())
+    {
+        return {mwm::PreviewSimd::Scalar, mwm::PreviewSimd::Avx2};
+    }
+    return {mwm::PreviewSimd::Scalar};
+}
+
 // v210ToPreview before the per-row accumulators, as the reference.
 void referencePreview(std::uint8_t const* v210, int width, int height, bool interlaced, int outWidth, int outHeight, bool nv12, std::uint8_t* dst)
 {
@@ -172,12 +200,129 @@ TEST_CASE("the downscale path gives the same bytes as the reference")
         }
         for (bool nv12 : {false, true})
         {
-            std::vector<std::uint8_t> expected(mwm::previewBytes(c.ow, c.oh)), actual(mwm::previewBytes(c.ow, c.oh));
+            std::vector<std::uint8_t> expected(mwm::previewBytes(c.ow, c.oh));
             referencePreview(frame.data(), c.w, c.h, c.interlaced, c.ow, c.oh, nv12, expected.data());
-            mwm::v210ToPreview(frame.data(), c.w, c.h, c.interlaced, c.ow, c.oh, nv12, actual.data());
-            CHECK(expected == actual);
+            for (auto const level : levels())
+            {
+                std::vector<std::uint8_t> actual(mwm::previewBytes(c.ow, c.oh));
+                {
+                    LevelGuard const guard(level);
+                    mwm::v210ToPreview(frame.data(), c.w, c.h, c.interlaced, c.ow, c.oh, nv12, actual.data());
+                }
+                CAPTURE(mwm::simdName(level));
+                CHECK(expected == actual);
+            }
         }
     }
+}
+
+TEST_CASE("the AVX2 preview gives the same bytes as the scalar one")
+{
+    if (!mwm::cpuHasAvx2())
+    {
+        MESSAGE("this CPU has no AVX2; the AVX2 preview is not tested");
+        CHECK(std::getenv("CI") == nullptr); // GitHub runners have AVX2
+        return;
+    }
+    struct Case
+    {
+        int w, h;
+        bool interlaced;
+        int ow, oh;
+    };
+    // Production sizes, column ranges of 1 to 4 samples, widths that are not a multiple of the
+    // 6-pixel group (1916, 1917, 50, 7) or are one of the 48-pixel block (48, 96: the end column
+    // is in a block past the line), output widths that are not a multiple of 8 (426, 958, 46,
+    // 10, 6, 2) and odd heights.
+    for (Case c : {Case{1920, 1080, false, 960, 540}, Case{1920, 1080, true, 960, 540}, Case{1920, 1080, false, 640, 360}, Case{1920, 1080, false, 426, 240},
+             Case{1280, 720, false, 960, 540}, Case{1280, 720, false, 1280, 720}, Case{720, 576, true, 640, 288}, Case{720, 486, false, 720, 486},
+             Case{1916, 1080, false, 958, 540}, Case{1917, 101, true, 640, 50}, Case{3840, 2160, false, 960, 540}, Case{1920, 1080, false, 2, 2},
+             Case{96, 4, false, 48, 2}, Case{48, 9, false, 46, 6}, Case{50, 10, false, 10, 4}, Case{7, 3, false, 6, 2}})
+    {
+        CAPTURE(c.w);
+        CAPTURE(c.h);
+        CAPTURE(c.interlaced);
+        CAPTURE(c.ow);
+        CAPTURE(c.oh);
+        std::size_t const bytes = mwm::v210FrameBytes(c.w, c.h);
+        std::vector<std::vector<std::uint8_t>> frames;
+        // Random words, the two spare bits included.
+        std::uint32_t seed = static_cast<std::uint32_t>(c.w * 7919 + c.h);
+        frames.emplace_back(bytes);
+        for (auto& b : frames.back())
+        {
+            seed = seed * 1664525u + 1013904223u;
+            b = static_cast<std::uint8_t>(seed >> 24);
+        }
+        // Every sample at one edge value, and the edge values mixed.
+        int const edges[] = {0, 1023, 64, 940, 4, 1019};
+        for (int value : edges)
+        {
+            frames.push_back(solid(c.w, c.h, value, value, value));
+        }
+        frames.emplace_back(bytes, 0);
+        for (std::size_t i = 0; i + 4 <= bytes; i += 4)
+        {
+            auto const sample = [&](std::size_t k) { return static_cast<std::uint32_t>(edges[(i / 4 * 3 + k + i / 4 / 5) % 6]); };
+            std::uint32_t const word = sample(0) | (sample(1) << 10) | (sample(2) << 20);
+            std::memcpy(frames.back().data() + i, &word, sizeof(word));
+        }
+        for (std::size_t f = 0; f < frames.size(); ++f)
+        {
+            CAPTURE(f);
+            for (bool nv12 : {false, true})
+            {
+                std::vector<std::uint8_t> scalar(mwm::previewBytes(c.ow, c.oh), 0xa5), avx2(mwm::previewBytes(c.ow, c.oh), 0x5a);
+                {
+                    LevelGuard const guard(mwm::PreviewSimd::Scalar);
+                    mwm::v210ToPreview(frames[f].data(), c.w, c.h, c.interlaced, c.ow, c.oh, nv12, scalar.data());
+                }
+                {
+                    LevelGuard const guard(mwm::PreviewSimd::Avx2);
+                    mwm::v210ToPreview(frames[f].data(), c.w, c.h, c.interlaced, c.ow, c.oh, nv12, avx2.data());
+                }
+                CAPTURE(nv12);
+                CHECK(scalar == avx2);
+            }
+        }
+    }
+}
+
+TEST_CASE("MONITOR_SIMD chooses the preview code")
+{
+    using mwm::PreviewSimd;
+    CHECK(mwm::chooseSimd("", true).level == PreviewSimd::Avx2);
+    CHECK(mwm::chooseSimd("", true).requested == "auto");
+    CHECK(mwm::chooseSimd("auto", true).level == PreviewSimd::Avx2);
+    CHECK(mwm::chooseSimd("auto", false).level == PreviewSimd::Scalar);
+    CHECK(mwm::chooseSimd("AVX2", true).level == PreviewSimd::Avx2);
+    CHECK(mwm::chooseSimd("scalar", true).level == PreviewSimd::Scalar);
+    CHECK(mwm::chooseSimd("scalar", true).warning.empty());
+    auto const missing = mwm::chooseSimd("avx2", false);
+    CHECK(missing.level == PreviewSimd::Scalar);
+    CHECK_FALSE(missing.warning.empty());
+    auto const unknown = mwm::chooseSimd("avx512", true);
+    CHECK(unknown.level == PreviewSimd::Avx2);
+    CHECK(unknown.requested == "avx512");
+    CHECK_FALSE(unknown.warning.empty());
+
+    LevelGuard const guard(mwm::previewSimd());
+    auto const best = mwm::cpuHasAvx2() ? PreviewSimd::Avx2 : PreviewSimd::Scalar;
+    ::setenv("MONITOR_SIMD", "scalar", 1);
+    CHECK(mwm::applySimdEnvironment().level == PreviewSimd::Scalar);
+    CHECK(mwm::previewSimd() == PreviewSimd::Scalar);
+    ::setenv("MONITOR_SIMD", "avx2", 1);
+    CHECK(mwm::applySimdEnvironment().level == best);
+    CHECK(mwm::previewSimd() == best);
+    ::setenv("MONITOR_SIMD", "scalar", 1);
+    mwm::applySimdEnvironment();
+    ::unsetenv("MONITOR_SIMD");
+    CHECK(mwm::applySimdEnvironment().level == best);
+    CHECK(mwm::previewSimd() == best);
+    mwm::setPreviewSimd(PreviewSimd::Avx2);
+    CHECK(mwm::previewSimd() == best);
+    CHECK(std::string(mwm::simdName(PreviewSimd::Avx2)) == "avx2");
+    CHECK(std::string(mwm::simdName(PreviewSimd::Scalar)) == "scalar");
 }
 
 TEST_CASE("v210 rows are padded to 128 bytes like MXL")

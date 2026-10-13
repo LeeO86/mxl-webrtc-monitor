@@ -19,6 +19,7 @@ struct ServiceInfo
     std::string gstreamer;
     std::string mediamtx;
     std::string encoder_available;
+    std::string simd; // preview conversion code: avx2 or scalar
 };
 
 // The built-in MediaMTX (own mode).

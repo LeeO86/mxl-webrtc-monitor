@@ -1,5 +1,6 @@
 #include "ops/metrics.hpp"
 
+#include "media/v210.hpp"
 #include "version.hpp"
 
 #include <sstream>
@@ -62,6 +63,9 @@ std::string renderMetrics(Config const& cfg, std::vector<ChannelView> const& cha
     out << "# TYPE mxl_webrtc_monitor_info gauge\n";
     out << "mxl_webrtc_monitor_info{version=\"" << kVersion << "\",mxl_version=\"" << mxlVersion << "\",encoder_available=\"" << encoderAvailable
         << "\"} 1\n";
+    out << "# HELP mxl_webrtc_monitor_simd_level CPU code of the preview conversion (MONITOR_SIMD).\n";
+    out << "# TYPE mxl_webrtc_monitor_simd_level gauge\n";
+    out << "mxl_webrtc_monitor_simd_level{level=\"" << simdName(previewSimd()) << "\"} 1\n";
     out << "# HELP mxl_webrtc_monitor_channel_state Current channel state.\n";
     out << "# TYPE mxl_webrtc_monitor_channel_state gauge\n";
     out << "# TYPE mxl_webrtc_monitor_grains_read_total counter\n";

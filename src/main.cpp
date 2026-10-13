@@ -2,6 +2,7 @@
 #include "config/config.hpp"
 #include "config/store.hpp"
 #include "media/engine.hpp"
+#include "media/v210.hpp"
 #include "nmos/connections.hpp"
 #include "nmos/node.hpp"
 #include "ops/api.hpp"
@@ -143,6 +144,13 @@ int main(int argc, char** argv)
             cfg.config_file = fileIt->second;
         }
         mwm::log::setLevel(cfg.log_level);
+        // MONITOR_SIMD picks the preview conversion's code (auto, avx2 or scalar).
+        auto const simd = mwm::applySimdEnvironment();
+        if (!simd.warning.empty())
+        {
+            mwm::log::warn("simd_fallback", {{"requested", simd.requested}, {"reason", simd.warning}});
+        }
+        mwm::log::info("simd", {{"preview", mwm::simdName(simd.level)}, {"requested", simd.requested}, {"cpu_avx2", mwm::cpuHasAvx2() ? "true" : "false"}});
         std::error_code stateEc;
         std::filesystem::create_directories(cfg.state_dir, stateEc);
         if (stateEc)
@@ -180,6 +188,7 @@ int main(int argc, char** argv)
         info.gstreamer = gst_version_string();
         info.mediamtx = mwm::kMediamtxPin;
         info.encoder_available = media.encoderAvailable();
+        info.simd = mwm::simdName(simd.level);
         api.setInfo(info);
 #if defined(MWM_HAS_UI)
         api.setIndexPage(std::string(mwm::webui::indexHtml()));

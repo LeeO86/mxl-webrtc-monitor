@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace mwm
@@ -23,4 +24,40 @@ std::size_t previewBytes(int outWidth, int outHeight);
 // their first field (bob). One pass over the source and no full-size intermediate,
 // instead of converting and scaling the full frame in GStreamer.
 void v210ToPreview(std::uint8_t const* v210, int width, int height, bool interlaced, int outWidth, int outHeight, bool nv12, std::uint8_t* dst);
+
+// CPU code of v210ToPreview's downscale path, the one every real preview takes (the
+// other cases stay scalar). Both give the same bytes.
+enum class PreviewSimd
+{
+    Scalar,
+    Avx2,
+};
+
+struct SimdChoice
+{
+    PreviewSimd level = PreviewSimd::Scalar;
+    std::string requested; // MONITOR_SIMD in lower case, "auto" when unset
+    std::string warning;   // set when the request is not followed
+};
+
+// "scalar" or "avx2".
+char const* simdName(PreviewSimd level);
+
+// True when the CPU has AVX2 and the OS saves its registers. The image is built for
+// plain x86-64, so the AVX2 code runs only after this check.
+bool cpuHasAvx2();
+
+// The level for a MONITOR_SIMD value: auto (or empty) takes AVX2 when the CPU has it,
+// scalar forces the scalar code. avx2 on a CPU without AVX2 gives scalar and an unknown
+// value gives auto, both with a warning.
+SimdChoice chooseSimd(std::string const& request, bool avx2);
+
+// Reads MONITOR_SIMD, sets the level and returns the choice (logged at start).
+SimdChoice applySimdEnvironment();
+
+// The level in use; until it is set, the best the CPU runs.
+PreviewSimd previewSimd();
+
+// Sets the level (tests, benchmarks). AVX2 on a CPU without it gives scalar.
+void setPreviewSimd(PreviewSimd level);
 } // namespace mwm
