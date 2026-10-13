@@ -68,6 +68,7 @@ Environment, then `MONITOR_CONFIG_FILE`, then the defaults below. Unknown enviro
 | `NMOS_SEED` | `$HOST_ID-monitor` | UUIDv5 seed for node, device and receivers |
 | `WEB_PORT` | 8100 | UI, REST, health, metrics |
 | `LOG_LEVEL` | `info` | |
+| `MONITOR_SIMD` | `auto` | CPU code of the preview conversion: `auto` (AVX2 when the CPU has it), `avx2` or `scalar`. Environment only, read at start |
 | `MONITOR_CONFIG_FILE` | empty | optional JSON file under the environment |
 | `METRICS_AUDIO_PEAK` | false | publish per-channel peak gauges |
 | `TSL_ENABLE` | false | listen for TSL UMD 5.0 tally |
@@ -94,7 +95,7 @@ Channel keys are `CH<n>_VIDEO_LABEL`, `_AUDIO_LABEL`, `_PREVIEW_HEIGHT`, `_VIDEO
 | GET | `/api/v1/config/export` |
 | POST | `/api/v1/config/import` |
 
-`GET /api/v1/info` has the version, `label` (the node label), the MXL, nmos-cpp, GStreamer and MediaMTX versions and the available encoders. Each channel in `GET /api/v1/channels` (and on the WebSocket) has its settings, both IS-05 legs (`state`, `reason`, `master_enable`, domain, flow, sender), format, encoder, viewers, `mediamtx` (`ready` and `tracks` of its MediaMTX path), playback URLs, meters (peak and RMS per input channel), `preview` (`path` of the stream, its publish `state` and the last `error`) and the TSL tally: `tsl_lh`, `tsl_rh`, `tsl_text_tally` (0 off, 1 red, 2 green, 3 amber), `tally` (the border colour) and `tsl_text` (the label). `PATCH /api/v1/channels/{n}` takes the channel settings (`video_label`, `audio_label`, `preview_height`, `video_bitrate_kbps`, `audio_bitrate_kbps`, `max_fps`, `audio_pair`, `downmix`, `overlay`, `overlay_label`, `overlay_source`, `overlay_format`, `tally_text`). `PUT /api/v1/config` replaces the configuration file with the given keys. A rejected change leaves the settings as they were.
+`GET /api/v1/info` has the version, `label` (the node label), the MXL, nmos-cpp, GStreamer and MediaMTX versions, the available encoders and `simd` (the preview conversion's code, `avx2` or `scalar`). Each channel in `GET /api/v1/channels` (and on the WebSocket) has its settings, both IS-05 legs (`state`, `reason`, `master_enable`, domain, flow, sender), format, encoder, viewers, `mediamtx` (`ready` and `tracks` of its MediaMTX path), playback URLs, meters (peak and RMS per input channel), `preview` (`path` of the stream, its publish `state` and the last `error`) and the TSL tally: `tsl_lh`, `tsl_rh`, `tsl_text_tally` (0 off, 1 red, 2 green, 3 amber), `tally` (the border colour) and `tsl_text` (the label). `PATCH /api/v1/channels/{n}` takes the channel settings (`video_label`, `audio_label`, `preview_height`, `video_bitrate_kbps`, `audio_bitrate_kbps`, `max_fps`, `audio_pair`, `downmix`, `overlay`, `overlay_label`, `overlay_source`, `overlay_format`, `tally_text`). `PUT /api/v1/config` replaces the configuration file with the given keys. A rejected change leaves the settings as they were.
 
 `/readyz` is 200 only when the MXL root is a directory, the built-in MediaMTX answers (own mode; a shared MediaMTX is not part of readiness), and, when `NMOS_REGISTRY_ADDRESS` is set, the Query API returns this node. `/statusz` has `preview`: the `mode` (`own` or `shared`), `publish_url`, `path_prefix`, in own mode `mediamtx` (`running`, `restarts`), and per channel `streams` (`channel`, `path`, `state`, `error`). Export is one JSON document with `version`, `settings` and `secrets_included: false`. Import restores settings and channels into `MONITOR_CONFIG_FILE` and skips keys set by the environment. There is nothing secret to omit.
 
@@ -120,6 +121,8 @@ The channels publish their streams over RTSP (TCP) to MediaMTX, which serves the
 The page plays `<PREVIEW_WHEP_URL>/<prefix>/ch<n>/whep` and falls back to `<PREVIEW_HLS_URL>/<prefix>/ch<n>/index.m3u8`. Empty bases are the own MediaMTX on `MONITOR_PUBLIC_IP`, with the hostname replaced by the page's.
 
 Each channel's publish state is `connecting`, `publishing` (MediaMTX took the stream and media flows) or `error` (with the last error, until it publishes again; the channel retries). `/statusz`, `/api/v1/channels`, the Status tab and the metrics `mxl_webrtc_monitor_preview_mode{mode}` and `mxl_webrtc_monitor_preview_publish_state{channel,state}` show the mode and the states.
+
+The preview picture is made from the v210 grain in one pass on the CPU: area average to the preview size, 10 to 8 bit, 4:2:0 (NV12 for NVENC, I420 for x264). The image is built for plain x86-64 and picks the code at start: an AVX2 version when the CPU has AVX2 (and the OS saves its registers), else the scalar one. Both give the same bytes. The start logs the choice, for example `{"level":"info","event":"simd","preview":"avx2","requested":"auto","cpu_avx2":"true"}`; `/api/v1/info` has `simd` and the metric `mxl_webrtc_monitor_simd_level{level}` is 1. `MONITOR_SIMD=scalar` forces the scalar code. `avx2` on a CPU without AVX2 and an unknown value log `simd_fallback` and take the automatic choice. `build/mwm-preview-bench [seconds] [frames in rotation] [case]` times both versions.
 
 The process writes `MEDIAMTX_CONFIG_PATH` in both modes. A 1.2.0 deployment with a MediaMTX sidecar keeps working: it sets `MEDIAMTX_RTSP_URL` (now an alias of `PREVIEW_PUBLISH_URL`, so shared mode publishes to the sidecar), and the sidecar reads the written config. A deployment with a sidecar that does not set `MEDIAMTX_RTSP_URL` runs the built-in MediaMTX in 1.3.0: remove the sidecar.
 
@@ -251,3 +254,17 @@ Lab run 2026-10-05, same host and method, 40 s measured: 1.0.3 (text overlay set
 | x264 | 16 | 1.0.3 | 799 | 1.4 ms | 0 | 6.3 cores | – |
 
 With x264, most of the remaining CPU is the encoder itself (ultrafast preset); `v210ToPreview` is about a third.
+
+Lab run 2026-10-13, same host: the preview conversion alone (`mwm-preview-bench`, GCC 13.3 `-O3` without `-march` as in the image, one thread pinned to an idle core, a new 5.5 MB grain per call as in production, random 10-bit content). The AVX2 code runs in AVX frequency licence 0 (3.6 GHz, like the scalar code).
+
+| Source to 960×540 | Scalar ms/frame | AVX2 ms/frame | Cores per channel at 50 fps (scalar → AVX2) |
+| --- | --- | --- | --- |
+| 1080p50, NV12 (NVENC) | 3.49 | 1.22 | 0.175 → 0.061 |
+| 1080p50, I420 (x264) | 3.18 | 1.18 | 0.159 → 0.059 |
+| 1080i50 (first field), NV12 | 2.87 | 1.01 | 0.143 → 0.050 |
+| 720p50, NV12 | 3.01 | 1.40 | 0.151 → 0.070 |
+| 2160p50, NV12 | 6.73 | 2.76 | 0.337 → 0.138 |
+
+That is about 0.1 cores less per 1080p50 channel, 1.6 cores for 16 channels. The AVX2 code uses no gather instructions: with the Downfall (GDS) microcode they are slow on Intel CPUs up to Ice Lake (this Xeon, the platform's i9-9900K), and a first version with gathers reached only 1.8× here.
+
+The same day, the running monitor built from this change (x264, so no GPU; 8 channels of 1080p50, video only, from the test player and the lab writers; pinned to 5 cores and their hyperthreads; 30 s, two runs each, the same values): `MONITOR_SIMD=scalar` 4.34 cores, `auto` (AVX2) 3.37 cores, that is 0.54 → 0.42 cores per channel (−22 %). 400 encoded fps and no drops in both; the mean encode latency went from 2.8 to 2.4 ms. NVENC was not measured; there the conversion is a larger share of the process (about 60 % in 1.0.3).

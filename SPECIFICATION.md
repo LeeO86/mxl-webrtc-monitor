@@ -318,7 +318,7 @@ self-contained. The same settings exist in every repo with browser previews.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/api/v1/info` | version, MXL/nmos-cpp/GStreamer versions, `mediamtx` (the running MediaMTX from its `/v3/info`, `unknown` when unreachable) and `mediamtx_pin` (the version of the examples), encoder availability |
+| GET | `/api/v1/info` | version, MXL/nmos-cpp/GStreamer versions, `mediamtx` (the running MediaMTX from its `/v3/info`, `unknown` when unreachable) and `mediamtx_pin` (the version of the examples), encoder availability, `simd` (the preview conversion's code) |
 | GET | `/api/v1/channels` | channels with state, routing, format, encoder, viewers |
 | PATCH | `/api/v1/channels/{n}` | per-channel settings (not routing) |
 | GET | `/api/v1/events` | WebSocket: status and meters |
@@ -451,6 +451,7 @@ that the environment owns. It returns 409 when `MONITOR_CONFIG_FILE` is unset.
 | `NMOS_SEED` | `HOST_ID-monitor` | UUIDv5 seed for the node, device and receivers |
 | `WEB_PORT` | 8100 | UI, REST, health, metrics |
 | `LOG_LEVEL` | `info` | JSON logs |
+| `MONITOR_SIMD` | `auto` | preview conversion code: `auto` (AVX2 when the CPU has it), `avx2` or `scalar`; environment only, read at start |
 | `TSL_ENABLE` | false | TSL UMD 5.0 tally receiver (§6.5) |
 | `TSL_UDP_PORT` / `TSL_TCP_PORT` | 8912 / 8913 | tally over UDP and TCP |
 | `TSL_SCREEN` | −1 | only this screen; −1 every screen |
@@ -488,6 +489,7 @@ is not part of v1.
 | Metric | Type | Labels |
 | --- | --- | --- |
 | `info` | gauge (1) | version, mxl_version, encoder_available |
+| `simd_level` | gauge (1) | level (`avx2` or `scalar`: the preview conversion's code) |
 | `channel_state` | gauge (1 for current state) | channel, kind (video/audio), state |
 | `grains_read_total` | counter | channel |
 | `grains_dropped_total` | counter | channel, reason (queue_full, too_late) |
