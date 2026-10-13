@@ -9,6 +9,7 @@
 #include "ops/mediamtx.hpp"
 #include "ops/metrics.hpp"
 #include "util/jsonutil.hpp"
+#include "version.hpp"
 
 #include <chrono>
 #include <memory>
@@ -211,7 +212,7 @@ TEST_CASE("widgets list")
     auto const& widget = list[0].get<picojson::object>();
     CHECK(widget.at("id").get<std::string>() == "channel");
     CHECK(!widget.at("title").get<std::string>().empty());
-    CHECK(widget.at("version").get<std::string>() == "1.3.0");
+    CHECK(widget.at("version").get<std::string>() == mwm::kVersion);
     CHECK(widget.at("min_size").get<picojson::object>().at("w").get<double>() == 320);
     CHECK(widget.at("min_size").get<picojson::object>().at("h").get<double>() == 200);
     auto const& params = widget.at("params").get<picojson::object>();
