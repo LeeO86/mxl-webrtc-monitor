@@ -203,7 +203,7 @@ std::string Api::infoJson() const
         << ",\"mxl_version\":" << jsonString(info_.mxl_version) << ",\"nmos_cpp\":" << jsonString(info_.nmos_cpp)
         << ",\"gstreamer\":" << jsonString(info_.gstreamer) << ",\"mediamtx\":" << jsonString(running.empty() ? "unknown" : running)
         << ",\"mediamtx_pin\":" << jsonString(info_.mediamtx)
-        << ",\"encoder_available\":" << jsonString(info_.encoder_available) << "}";
+        << ",\"encoder_available\":" << jsonString(info_.encoder_available) << ",\"simd\":" << jsonString(info_.simd) << "}";
     return out.str();
 }
 

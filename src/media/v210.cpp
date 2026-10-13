@@ -1,6 +1,11 @@
 #include "media/v210.hpp"
 
+#include "media/v210_detail.hpp"
+
 #include <algorithm>
+#include <atomic>
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 
@@ -71,6 +76,74 @@ void fillV210Bar(std::uint8_t* dst, int width, int height, int frame)
     }
 }
 
+char const* simdName(PreviewSimd level)
+{
+    return level == PreviewSimd::Avx2 ? "avx2" : "scalar";
+}
+
+bool cpuHasAvx2()
+{
+#if defined(__x86_64__)
+    // libgcc's check also needs the OS to save the YMM registers (OSXSAVE and XCR0).
+    __builtin_cpu_init();
+    return __builtin_cpu_supports("avx2") != 0;
+#else
+    return false;
+#endif
+}
+
+SimdChoice chooseSimd(std::string const& request, bool avx2)
+{
+    std::string value;
+    for (char const c : request)
+    {
+        value += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    SimdChoice choice;
+    choice.requested = value.empty() ? "auto" : value;
+    choice.level = avx2 ? PreviewSimd::Avx2 : PreviewSimd::Scalar;
+    if (value == "scalar")
+    {
+        choice.level = PreviewSimd::Scalar;
+    }
+    else if (value == "avx2" && !avx2)
+    {
+        choice.warning = "MONITOR_SIMD=avx2 but the CPU has no AVX2; using scalar";
+    }
+    else if (!value.empty() && value != "auto" && value != "avx2")
+    {
+        choice.warning = "MONITOR_SIMD must be auto, avx2 or scalar; using auto";
+    }
+    return choice;
+}
+
+namespace
+{
+std::atomic<PreviewSimd>& simdLevel()
+{
+    static std::atomic<PreviewSimd> level{cpuHasAvx2() ? PreviewSimd::Avx2 : PreviewSimd::Scalar};
+    return level;
+}
+} // namespace
+
+PreviewSimd previewSimd()
+{
+    return simdLevel().load(std::memory_order_relaxed);
+}
+
+void setPreviewSimd(PreviewSimd level)
+{
+    simdLevel().store(level == PreviewSimd::Avx2 && !cpuHasAvx2() ? PreviewSimd::Scalar : level, std::memory_order_relaxed);
+}
+
+SimdChoice applySimdEnvironment()
+{
+    char const* const request = std::getenv("MONITOR_SIMD");
+    auto const choice = chooseSimd(request == nullptr ? "" : request, cpuHasAvx2());
+    setPreviewSimd(choice.level);
+    return choice;
+}
+
 std::size_t previewBytes(int outWidth, int outHeight)
 {
     return static_cast<std::size_t>(outWidth) * static_cast<std::size_t>(outHeight) * 3 / 2;
@@ -78,37 +151,8 @@ std::size_t previewBytes(int outWidth, int outHeight)
 
 namespace
 {
-// Largest count a Divider takes.
-constexpr long long kMaxDivisor = 1LL << 22;
-
-// (sum + count/2) / count by one multiply and a shift (Granlund and Montgomery): with
-// 2^l >= count and m = ceil(2^(2l+9) / count) it is exact for every n < 2^(l+9), and n is
-// at most 256.25·count (samples are at most 1023, count is four times their number).
-// n·m stays below 2^64 for counts up to kMaxDivisor. Every output pixel divides, and the
-// div instruction was most of the preview's time.
-struct Divider
-{
-    std::uint64_t magic = 1;
-    std::uint32_t shift = 0;
-    std::uint32_t half = 0;
-
-    explicit Divider(std::uint32_t d)
-        : half(d / 2)
-    {
-        std::uint32_t l = 0;
-        while ((std::uint64_t{1} << l) < d)
-        {
-            ++l;
-        }
-        shift = 2 * l + 9;
-        magic = ((std::uint64_t{1} << shift) + d - 1) / d;
-    }
-
-    [[nodiscard]] std::uint32_t rounded(std::uint32_t sum) const
-    {
-        return static_cast<std::uint32_t>((std::uint64_t{sum + half} * magic) >> shift);
-    }
-};
+using detail::Divider;
+using detail::kMaxDivisor;
 
 // The divider of each output column (its source columns × `lines` × 4) for each line count
 // that occurs; a ratio gives only a few, so each set is built once.
@@ -331,6 +375,13 @@ void v210ToPreview(std::uint8_t const* v210, int width, int height, bool interla
     long long const maxCount = std::max(ceilDiv(width, outWidth), ceilDiv(width / 2, outWidth / 2)) * 2 * ceilDiv(rows, outHeight) * 4;
     if (width >= outWidth && rows >= outHeight && maxCount <= kMaxDivisor)
     {
+#if defined(__x86_64__)
+        if (previewSimd() == PreviewSimd::Avx2)
+        {
+            detail::downscaleToPreviewAvx2(v210, width, rows, step, stride, outWidth, outHeight, nv12, dst);
+            return;
+        }
+#endif
         downscaleToPreview(v210, width, rows, step, stride, outWidth, outHeight, nv12, dst);
         return;
     }

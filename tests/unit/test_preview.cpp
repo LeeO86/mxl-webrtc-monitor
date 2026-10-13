@@ -188,6 +188,7 @@ TEST_CASE("status and metrics show the mode and each stream's publish state")
     auto const metrics = mwm::renderMetrics(shared.cfg, shared.book->snapshot(), "mxl", "gst", "x264", {}, {}, "shared");
     CHECK(metrics.find("mxl_webrtc_monitor_preview_mode{mode=\"shared\"} 1\n") != std::string::npos);
     CHECK(metrics.find("mxl_webrtc_monitor_preview_mode{mode=\"own\"} 0\n") != std::string::npos);
+    CHECK(metrics.find("mxl_webrtc_monitor_simd_level{level=\"") != std::string::npos);
     CHECK(metrics.find("mxl_webrtc_monitor_preview_publish_state{channel=\"1\",state=\"publishing\"} 1\n") != std::string::npos);
     CHECK(metrics.find("mxl_webrtc_monitor_preview_publish_state{channel=\"2\",state=\"error\"} 1\n") != std::string::npos);
     CHECK(metrics.find("mxl_webrtc_monitor_preview_publish_state{channel=\"2\",state=\"connecting\"} 0\n") != std::string::npos);
