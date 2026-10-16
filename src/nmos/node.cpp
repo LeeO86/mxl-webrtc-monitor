@@ -387,7 +387,8 @@ void NmosNode::start()
                             hd[U("urn:x-nmos:cap:format:frame_width")] = nmos::make_caps_integer_constraint({1920});
                             hd[U("urn:x-nmos:cap:format:frame_height")] = nmos::make_caps_integer_constraint({1080});
                             hd[U("urn:x-nmos:cap:format:interlace_mode")] =
-                                nmos::make_caps_string_constraint({nmos::interlace_modes::progressive.name, nmos::interlace_modes::interlaced_tff.name});
+                                nmos::make_caps_string_constraint({nmos::interlace_modes::progressive.name, nmos::interlace_modes::interlaced_tff.name,
+                                    nmos::interlace_modes::interlaced_bff.name});
                             hd[U("urn:x-nmos:cap:format:color_sampling")] = nmos::make_caps_string_constraint({sdp::samplings::YCbCr_4_2_2.name});
                             hd[U("urn:x-nmos:cap:format:component_depth")] = nmos::make_caps_integer_constraint({std::int64_t{10}});
                             web::json::value uhd = hd;

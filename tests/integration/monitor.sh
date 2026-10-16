@@ -119,6 +119,14 @@ wait_http "http://127.0.0.1:${NMOS_PORT}/x-nmos/node/v1.3/self/"
 RECEIVERS="$(curl -sf "http://127.0.0.1:${NMOS_PORT}/x-nmos/node/v1.3/receivers")"
 VIDEO_RX="$(python3 -c 'import json,sys; items=json.load(sys.stdin); print(next(i["id"] for i in items if i["label"].endswith("Video")))' <<<"$RECEIVERS")"
 AUDIO_RX="$(python3 -c 'import json,sys; items=json.load(sys.stdin); print(next(i["id"] for i in items if i["label"].endswith("Audio")))' <<<"$RECEIVERS")"
+# BCP-004-01 caps (1.4.2): 1080 lines take progressive, interlaced_tff and interlaced_bff; 2160 lines progressive.
+python3 -c '
+import json, sys
+rx = next(i for i in json.load(sys.stdin) if i["label"].endswith("Video"))
+modes = {s["urn:x-nmos:cap:format:frame_height"]["enum"][0]: sorted(s["urn:x-nmos:cap:format:interlace_mode"]["enum"])
+         for s in rx["caps"]["constraint_sets"]}
+assert modes == {1080: ["interlaced_bff", "interlaced_tff", "progressive"], 2160: ["progressive"]}, modes
+' <<<"$RECEIVERS"
 
 patch() {
   local id="$1" domain="$2" flow="$3"

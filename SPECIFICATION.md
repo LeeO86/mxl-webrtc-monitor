@@ -127,8 +127,9 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
   configurable.
 - Receiver capabilities (BCP-004-01): video `media_type` `video/v210` (and
   `video/v210a` if supported by the pinned MXL; key is ignored), any resolution and
-  rate listed in a configurable set (default: 1080i/p and 2160p at 25/29.97/50/59.94);
-  audio `audio/float32`, 1 to 64 channels, 48 kHz.
+  rate listed in a configurable set (default: 1080i/p and 2160p at 25/29.97/50/59.94;
+  1080 lines `progressive`, `interlaced_tff` and `interlaced_bff` (bff since 1.4.2),
+  2160 lines `progressive`); audio `audio/float32`, 1 to 64 channels, 48 kHz.
 - Registration: static registry address (`NMOS_REGISTRY_ADDRESS` / `_PORT`).
   The Query API is `NMOS_QUERY_ADDRESS` (default: the registry address) on
   `NMOS_QUERY_PORT` (default: registration port + 1). DNS-SD browsing and mDNS
