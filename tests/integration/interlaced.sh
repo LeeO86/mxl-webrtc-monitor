@@ -249,6 +249,9 @@ if not 1 <= rate <= 60:
     raise SystemExit(f"ch5: {rate} too-late retries per second (expected at most one per field, 50)")
 PY
 check_eq "$(field 5 video.state)" "no_signal" "ch5 state"
+# The slate goes out once per frame: the encoder and the stream at 25 fps (not one picture per retry).
+fps5="$(metric 'mxl_webrtc_monitor_encode_fps{channel="5"}')"
+python3 -c 'import sys; f = float(sys.argv[1]); print(f"ch5: encoder {f:.1f} fps (slate)"); sys.exit(0 if 22 <= f <= 28 else f"ch5: slate encoded at {f} fps, expected 25")' "$fps5"
 
 # grab <channel> <name>: decode the channel's RTSP stream for 5 s; prints the stream's frame rate (its
 # timestamps) and the mean luma of the upper and the lower half's middle band of the last picture.
@@ -315,6 +318,8 @@ PY
 # (1.4.0 showed the field squashed into the upper half: black below.)
 expect 1 tff-field 136 200 80
 expect 2 bff-field 136 200 80
+# Channel 5's slate (studio black) as a 25 fps stream.
+expect 5 slate 136 16 16
 
 # At the frame's height: the two fields woven. The bands average both fields; the first field is on
 # the even lines for tff (ch1) and on the odd lines for bff (ch2).
@@ -356,6 +361,22 @@ for _ in $(seq 1 40); do
 done
 sleep 1
 expect 3 recovered 136 200 80
+
+# Channel 5 recovers without a pipeline rebuild: it is routed to a flow of the same format in a domain
+# that keeps 200 ms. The picture comes back at 25 fps; slate timestamps that ran ahead of real time
+# would hold it back.
+builds5="$(grep -c '"event":"pipeline_playing","channel":"5"' "$WORKDIR/monitor.log")"
+SHORT_FIXED="10000000-0000-4000-8000-000000000008"
+writer "$SHORT_FIXED" 20000000-0000-4000-8000-000000000008 tff writer-short-fixed.log
+for _ in $(seq 1 50); do
+  [[ -f "$DOMAIN/$SHORT_FIXED.mxl-flow/flow_def.json" ]] && break
+  sleep 0.1
+done
+route 5 "$SHORT_FIXED"
+want_state 5 running
+check_eq "$(grep -c '"event":"pipeline_playing","channel":"5"' "$WORKDIR/monitor.log")" "$builds5" "ch5 pipeline builds (no rebuild on recovery)"
+rates 5
+expect 5 short-recovered 136 200 80
 
 alive
 kill -TERM "$MONITOR_PID"

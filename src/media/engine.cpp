@@ -1064,10 +1064,13 @@ private:
                 // once, without either: a reader that stays too late (READ_OFFSET_GRAINS beyond the
                 // flow's ring) spun a core and left the channel in its last state (`waiting` right after
                 // a route) with no picture published. Now it is `no_signal` with a slate after 500 ms
-                // without a good grain, and a too-late retry waits one grain.
+                // without a good grain, and a too-late retry waits one grain. The slate goes out at most
+                // once per frame period: each picture advances the stream by one frame, and more would
+                // run its timestamps ahead of real time (the stall of 1.4.0) and ask the audio for too much.
+                auto const steadyNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
                 bool const recent = std::chrono::steady_clock::now() - lastGood < std::chrono::milliseconds(500);
                 book_.setProbe(index_, LegKind::Video, true, true, recent, "");
-                if (!recent)
+                if (!recent && steadyNs - lastPushNs_.load() >= static_cast<std::int64_t>(frameNs))
                 {
                     ensureSlate(format, slate);
                     pushVideo(slate.data(), slate.size(), format);

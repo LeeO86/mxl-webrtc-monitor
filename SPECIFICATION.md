@@ -192,7 +192,11 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
   much audio as the pushed video frames cover, read sample by sample after the last
   pushed sample; samples that are not there in time become silence.
 - If the reader falls behind beyond the ring (too late), it resynchronises to head
-  minus offset and counts a `resync` (metric).
+  minus offset and counts a `resync` (metric). A reader that stays too late (1.4.1;
+  e.g. `READ_OFFSET_GRAINS` beyond the flow's ring) retries once per grain and is
+  `no_signal` with a slate (one picture per frame period) after 500 ms without a good
+  grain; `resyncs_total` and `grains_dropped_total{reason="too_late"}` then rise about
+  once per grain.
 - Interlaced flows (1.4.1): MXL stores one field per grain (`frame_height / 2` lines,
   at twice the definition's `grain_rate`). Grain 2k is the first field of frame k
   (top for `interlaced_tff`, bottom for `interlaced_bff`). The reader reads frames
@@ -514,7 +518,7 @@ is not part of v1.
 | `channel_state` | gauge (1 for current state) | channel, kind (video/audio), state (not_routed, waiting, no_signal, running, unsupported) |
 | `grains_read_total` | counter | channel (grains: an interlaced flow's fields) |
 | `grains_dropped_total` | counter | channel, reason (queue_full, too_late) |
-| `resyncs_total` | counter | channel |
+| `resyncs_total` | counter | channel (about one per grain while a channel stays too late) |
 | `read_lag_grains` | gauge | channel (grains: an interlaced flow's fields) |
 | `encode_fps` | gauge | channel |
 | `encode_latency_seconds` | histogram | channel, encoder |
