@@ -957,6 +957,42 @@ private:
             // and 2k + 1). READ_OFFSET_GRAINS counts units, so the delay in time stays that of a
             // progressive flow of the same frame rate, and one picture per frame goes to the encoder.
             auto const layout = videoGrainLayout(format.width, format.height, format.interlaced);
+            // MXL's own grain rate must fit the definition too: whole-frame grains under an interlaced
+            // definition pass the size check and would be shown squashed. Checked before any index is
+            // computed from it (the reader would count frames of grains that are not fields).
+            auto const rateProblem = checkGrainRate(format.interlaced, format.rateNum, format.rateDen, info.common.grainRate.numerator,
+                info.common.grainRate.denominator);
+            // The flow does not fit its definition: state `unsupported` with a slate (logged and counted
+            // once per flow, format and reason); the flow is opened again so a writer that re-creates it
+            // with a fitting definition is read.
+            auto const refuse = [&](std::string const& problem, std::uint64_t grainSize) {
+                auto const key = route.flow_id + "|" + format.signature() + "|" + problem;
+                bool const first = key != unsupportedKey;
+                if (first)
+                {
+                    unsupportedKey = key;
+                    log::warn("video_unsupported", {{"channel", std::to_string(index_)}, {"flow", route.flow_id}, {"reason", problem},
+                                                       {"grain_size", std::to_string(grainSize)}, {"expected", std::to_string(layout.bytes)},
+                                                       {"width", std::to_string(format.width)}, {"height", std::to_string(format.height)},
+                                                       {"interlace_mode", format.interlaceMode()},
+                                                       {"grain_rate", std::to_string(info.common.grainRate.numerator) + "/" +
+                                                                          std::to_string(info.common.grainRate.denominator)}});
+                }
+                book_.setUnsupported(index_, LegKind::Video, problem, first);
+                haveIndex = false;
+                mxlReleaseFlowReader(videoInstance_, videoReader_);
+                videoReader_ = nullptr;
+                videoFlow_.clear();
+                ensureSlate(format, slate);
+                pushVideo(slate.data(), slate.size(), format);
+                publishCounters(0);
+                sleepMs(200, route, LegKind::Video);
+            };
+            if (!rateProblem.empty())
+            {
+                refuse(rateProblem, 0);
+                continue;
+            }
             std::uint64_t const unitGrains = layout.fields ? 2 : 1;
             std::uint64_t const head = runtime.headIndex;
             std::uint64_t const headUnit = newestUnit(head, layout.fields);
@@ -982,18 +1018,32 @@ private:
                 sleepMs(5, route, LegKind::Video);
                 continue;
             }
-            // The unit's grains: [0] the grain or the first field, [1] the second field.
+            // The unit's grains: [0] the grain or the first field, [1] the second field. The first
+            // `needed` must be there and valid (first_field: grain 2k only; weave: both fields); a
+            // missing or invalid second field in first_field mode does not hold the frame back.
             std::uint64_t const firstGrain = firstGrainOfUnit(index, layout.fields);
+            std::uint64_t const needed = requiredGrains(layout.fields, fieldPreviewMode(format.height, previewH_));
             mxlGrainInfo grains[2]{};
             std::uint8_t* payloads[2] = {nullptr, nullptr};
             mxlStatus status = MXL_STATUS_OK;
-            for (std::uint64_t i = 0; i < unitGrains && status == MXL_STATUS_OK; ++i)
+            std::uint64_t fetched = 0;
+            for (std::uint64_t i = 0; i < unitGrains; ++i)
             {
-                status = mxlFlowReaderGetGrainNonBlocking(videoReader_, firstGrain + i, &grains[i], &payloads[i]);
-                if (status == MXL_STATUS_OK && payloads[i] == nullptr)
+                auto got = mxlFlowReaderGetGrainNonBlocking(videoReader_, firstGrain + i, &grains[i], &payloads[i]);
+                if (got == MXL_STATUS_OK && payloads[i] == nullptr)
                 {
-                    status = MXL_ERR_UNKNOWN;
+                    got = MXL_ERR_UNKNOWN;
                 }
+                if (got != MXL_STATUS_OK)
+                {
+                    payloads[i] = nullptr;
+                    if (i < needed)
+                    {
+                        status = got;
+                    }
+                    break;
+                }
+                ++fetched;
             }
             if (status == MXL_ERR_OUT_OF_RANGE_TOO_LATE || status == MXL_ERR_FLOW_INVALID)
             {
@@ -1020,41 +1070,22 @@ private:
             }
             // Every grain is checked against the definition before it is read: a grain smaller than the
             // definition says (a field where a frame was declared, a rewritten flow_def.json) never
-            // goes to the converter. The channel is `unsupported` and shows a slate; the flow is opened
-            // again so a writer that re-creates it with a fitting definition is read.
+            // goes to the converter.
             std::string problem;
-            for (std::uint64_t i = 0; i < unitGrains && problem.empty(); ++i)
+            for (std::uint64_t i = 0; i < needed && problem.empty(); ++i)
             {
                 problem = checkVideoGrain(layout, format.width, format.height, grains[i].grainSize);
             }
             if (!problem.empty())
             {
-                auto const key = route.flow_id + "|" + format.signature() + "|" + problem;
-                bool const first = key != unsupportedKey;
-                if (first)
-                {
-                    unsupportedKey = key;
-                    log::warn("video_unsupported", {{"channel", std::to_string(index_)}, {"flow", route.flow_id}, {"reason", problem},
-                                                       {"grain_size", std::to_string(grains[0].grainSize)}, {"expected", std::to_string(layout.bytes)},
-                                                       {"width", std::to_string(format.width)}, {"height", std::to_string(format.height)},
-                                                       {"interlace_mode", format.interlaceMode()}});
-                }
-                book_.setUnsupported(index_, LegKind::Video, problem, first);
-                haveIndex = false;
-                mxlReleaseFlowReader(videoInstance_, videoReader_);
-                videoReader_ = nullptr;
-                videoFlow_.clear();
-                ensureSlate(format, slate);
-                pushVideo(slate.data(), slate.size(), format);
-                publishCounters(0);
-                sleepMs(200, route, LegKind::Video);
+                refuse(problem, grains[0].grainSize);
                 continue;
             }
             unsupportedKey.clear();
             lastIndex = index;
             haveIndex = true;
             bool valid = true;
-            for (std::uint64_t i = 0; i < unitGrains; ++i)
+            for (std::uint64_t i = 0; i < needed; ++i)
             {
                 valid = valid && (grains[i].flags & MXL_GRAIN_FLAG_INVALID) == 0 && grains[i].validSlices == grains[i].totalSlices;
             }
@@ -1073,7 +1104,7 @@ private:
             alignTimestamp_.store(ts);
             alignAtNs_.store(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
             frameSamples_.store(std::max(1, 48000 * format.rateDen / std::max(format.rateNum, 1)));
-            grainsRead_.fetch_add(unitGrains);
+            grainsRead_.fetch_add(fetched);
             lastGood = std::chrono::steady_clock::now();
             book_.setProbe(index_, LegKind::Video, true, true, true, "");
             book_.setFormat(index_, format.width, format.height, format.rateNum, format.rateDen, format.interlaced,

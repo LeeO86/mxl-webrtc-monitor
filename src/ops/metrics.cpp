@@ -41,7 +41,7 @@ std::string LatencyHistogram::render(std::string const& name, std::string const&
 namespace
 {
 char const* kStates[] = {"not_routed", "waiting", "no_signal", "running", "unsupported"};
-char const* kUnsupportedReasons[] = {"grain_too_small", "odd_interlaced_height", "no_raster"};
+char const* kUnsupportedReasons[] = {"grain_too_small", "odd_interlaced_height", "no_raster", "format_mismatch"};
 char const* kPublishStates[] = {"connecting", "publishing", "error"};
 
 void gaugeState(std::ostringstream& out, int channel, char const* kind, RunState state)

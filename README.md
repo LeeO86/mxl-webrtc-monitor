@@ -37,7 +37,7 @@ Environment, then `MONITOR_CONFIG_FILE`, then the defaults below. Unknown enviro
 | `MONITOR_MAX_FPS` | 0 | 0 = source rate |
 | `MONITOR_VIDEO_BITRATE_KBPS` | 2000 | per channel |
 | `MONITOR_AUDIO_BITRATE_KBPS` | 128 | per channel |
-| `READ_OFFSET_GRAINS` | 2 | read behind head |
+| `READ_OFFSET_GRAINS` | 2 | read behind head (frames for an interlaced flow) |
 | `ENCODER` | `auto` | `auto`, `nvenc`, `x264` |
 | `MONITOR_PUBLIC_IP` | first non-loopback IPv4 | ICE host. Alias source for `NMOS_HOST_ADDRESS` |
 | `NMOS_HOST_ADDRESS` | `MONITOR_PUBLIC_IP` | IP on the IS-04 href, API endpoints and IS-05 control hrefs |
@@ -130,9 +130,9 @@ The process writes `MEDIAMTX_CONFIG_PATH` in both modes. A 1.2.0 deployment with
 
 MXL stores an interlaced flow as one field per grain: half the frame's lines, at twice the flow definition's `grain_rate` (a 1080i flow declared at 25/1 has 50 grains per second). Grain 2k is the first field of frame k: the top field for `interlaced_tff`, the bottom field for `interlaced_bff`. The monitor reads both fields of a frame and encodes one picture per frame, at the frame rate (`1080i50` in the format text is 25 frames per second). `READ_OFFSET_GRAINS` counts frames for such a flow; `grains_read_total` counts fields.
 
-A preview not taller than a field (the default 540 lines from 1080i) is the frame's first field alone: every line the preview can show, without combing. A taller preview (`preview_height` above half the source height) weaves the two fields into the frame, which shows combing on motion. The channel's `field_preview` says which (`first_field` or `weave`), `interlace_mode` the flow's field order.
+A preview not taller than a field (the default 540 lines from 1080i) is the frame's first field alone: every line the preview can show, without combing; only that field has to be there and valid. A taller preview (`preview_height` above half the source height) weaves the two fields into the frame, which shows combing on motion. The channel's `field_preview` says which (`first_field` or `weave`), `interlace_mode` the flow's field order.
 
-Every grain is checked against the flow definition before it is read. When the grains do not fit it (smaller than a field or frame of the declared size, or an interlaced flow with an odd height), the video leg is `unsupported` with the reason (`grain_too_small`, `odd_interlaced_height`, `no_raster`), the channel shows a slate, the log has one `video_unsupported` line and `mxl_webrtc_monitor_video_unsupported_total{channel,reason}` counts it. The monitor opens the flow again every 200 ms and shows it as soon as a writer re-creates it with a fitting definition.
+Every grain is checked against the flow definition before it is read. When the grains do not fit it (smaller than a field or frame of the declared size, an interlaced flow with an odd height, or an interlaced definition while MXL's own grain rate is not twice its `grain_rate`, that is, the grains are not fields), the video leg is `unsupported` with the reason (`grain_too_small`, `odd_interlaced_height`, `no_raster`, `format_mismatch`), the channel shows a slate, the log has one `video_unsupported` line and `mxl_webrtc_monitor_video_unsupported_total{channel,reason}` counts it once per flow, format and reason. The monitor opens the flow again every 200 ms and shows it as soon as a writer re-creates it with a fitting definition.
 
 ## Widgets
 

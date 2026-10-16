@@ -197,11 +197,15 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
   at twice the definition's `grain_rate`). Grain 2k is the first field of frame k
   (top for `interlaced_tff`, bottom for `interlaced_bff`). The reader reads frames
   (both fields), `READ_OFFSET_GRAINS` counts frames, and one picture per frame goes
-  to the encoder at the frame rate.
+  to the encoder at the frame rate. With the first-field preview (§5.3) only grain
+  2k must be there and valid; the woven preview needs both.
 - Every grain is checked against the flow definition before it is read. A grain
   smaller than the definition's field or frame (`grain_too_small`), an interlaced
   flow with an odd height (`odd_interlaced_height`) or no raster (`no_raster`) is
-  state `unsupported` with that reason: a slate, never a read past the grain. The
+  state `unsupported` with that reason: a slate, never a read past the grain. An
+  interlaced definition while MXL's own grain rate (`mxlFlowConfigInfo`) is not
+  twice its `grain_rate` (the grains are not fields) is `unsupported` with
+  `format_mismatch`. The
   reader opens the flow again (200 ms) and resumes when the grains fit.
 - Format change of the source (new flow or changed `flow_def.json`): the channel
   rebuilds its pipeline. If the source mints a new flow id, the old id goes to
@@ -356,7 +360,8 @@ Additions for previews (1.3.0, §5.7): `preview` (`path`, `state`, `error`) in e
 Additions for interlaced input (1.4.1, §5.2): the leg state `unsupported` (with the reason);
 `interlace_mode` (`progressive`, `interlaced_tff`, `interlaced_bff`; null before a flow was
 opened) and `field_preview` (`first_field` or `weave`; null for a progressive flow) in each
-channel of `/api/v1/channels` and the events.
+channel of `/api/v1/channels` and the events. Like `format`, both keep the last flow's value
+after the channel is un-routed.
 
 ### 6.4 Ops endpoints
 
@@ -440,7 +445,7 @@ that the environment owns. It returns 409 when `MONITOR_CONFIG_FILE` is unset.
 | `MONITOR_MAX_FPS` | 0 | 0 = source rate |
 | `MONITOR_VIDEO_BITRATE_KBPS` | 2000 | per channel |
 | `MONITOR_AUDIO_BITRATE_KBPS` | 128 | per channel |
-| `READ_OFFSET_GRAINS` | 2 | read behind head |
+| `READ_OFFSET_GRAINS` | 2 | read behind head (frames for an interlaced flow) |
 | `ENCODER` | `auto` | `auto`, `nvenc`, `x264` |
 | `MONITOR_PUBLIC_IP` | first non-loopback IPv4 | ICE host (`webrtcAdditionalHosts`) and the default for `NMOS_HOST_ADDRESS`. Must be an IP literal, not loopback and not `0.0.0.0` |
 | `NMOS_HOST_ADDRESS` | `MONITOR_PUBLIC_IP` | IP announced on the IS-04 href, API endpoints and IS-05 control hrefs |
@@ -510,7 +515,7 @@ is not part of v1.
 | `grains_read_total` | counter | channel (grains: an interlaced flow's fields) |
 | `grains_dropped_total` | counter | channel, reason (queue_full, too_late) |
 | `resyncs_total` | counter | channel |
-| `read_lag_grains` | gauge | channel |
+| `read_lag_grains` | gauge | channel (grains: an interlaced flow's fields) |
 | `encode_fps` | gauge | channel |
 | `encode_latency_seconds` | histogram | channel, encoder |
 | `encoder_fallbacks_total` | counter | channel |
@@ -519,7 +524,7 @@ is not part of v1.
 | `audio_peak_dbfs` | gauge | channel, input_channel (optional, off by default) |
 | `preview_mode` | gauge (1 for the mode) | mode (own/shared) |
 | `preview_publish_state` | gauge (1 for the current state) | channel, state (connecting/publishing/error) |
-| `video_unsupported_total` | counter | channel, reason (grain_too_small, odd_interlaced_height, no_raster) |
+| `video_unsupported_total` | counter | channel, reason (grain_too_small, odd_interlaced_height, no_raster, format_mismatch) |
 
 A Grafana dashboard `deploy/grafana/mxl-webrtc-monitor.json` shows states, lag,
 drops, encode fps and latency, bitrate and viewers. mediamtx's own metrics are

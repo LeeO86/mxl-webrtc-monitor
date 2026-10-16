@@ -97,6 +97,7 @@ const REASON_TEXT = {
   grain_too_small: "grains smaller than the flow definition",
   odd_interlaced_height: "interlaced with an odd height",
   no_raster: "no picture size",
+  format_mismatch: "grains do not match the interlace mode",
 };
 export const reasonText = (reason) => REASON_TEXT[reason] || (reason || "").replaceAll("_", " ");
 

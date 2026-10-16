@@ -83,7 +83,7 @@ public:
     void setProbe(int channel, LegKind kind, bool domainResolved, bool flowOpen, bool flowing, std::string const& reason);
     void setFormat(int channel, int width, int height, int rateNum, int rateDen, bool interlaced, std::string const& format, int audioChannels);
     // The video flow's grains do not fit its definition: state `unsupported` with `reason`. `count`
-    // adds one to unsupported_total (once per flow and reason, not per retry).
+    // adds one to unsupported_total (once per flow, format and reason, not per retry).
     void setUnsupported(int channel, LegKind kind, std::string const& reason, bool count);
     void setScan(int channel, std::string const& interlaceMode, std::string const& fieldPreview);
     void setEncoder(int channel, std::string const& encoder);

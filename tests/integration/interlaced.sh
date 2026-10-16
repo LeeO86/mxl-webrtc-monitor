@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Integration (1.4.1): interlaced inputs. MXL 218ddaa stores an interlaced flow as one field per grain
 # (height / 2 lines at twice the definition's grain_rate); 1.4.0 took each field for a frame (squashed
-# into the upper half, pushed at twice the frame rate, so the preview stalled). Three channels:
+# into the upper half, pushed at twice the frame rate, so the preview stalled). Four channels:
 #   ch1 a 480x272 i25 tff flow, ch2 the same bff, ch3 a tff flow whose flow_def.json was rewritten to
-#   say progressive (a grain smaller than the definition says).
+#   say progressive (a grain smaller than the definition says), ch4 a progressive flow whose
+#   flow_def.json was rewritten to say interlaced_tff (whole frames, not fields: format_mismatch).
 # Checks: ch1 and ch2 run at the field rate (grains) and the frame rate (encoder, stream timestamps),
 # the decoded preview is the first field over the whole picture (preview height <= a field), then the
 # woven frame (preview height = the frame); ch3 is `unsupported` (grain_too_small), counted and logged
-# once, the process stays up, and ch3 recovers when its writer re-creates the flow.
+# once, ch4 is `unsupported` (format_mismatch), the process stays up, and ch3 recovers when its writer
+# re-creates the flow.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -20,6 +22,7 @@ DOMAIN_ID="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 TFF="10000000-0000-4000-8000-000000000001"
 BFF="10000000-0000-4000-8000-000000000002"
 LIE="10000000-0000-4000-8000-000000000003"
+FRAMES="10000000-0000-4000-8000-000000000005"
 WEB_PORT="${WEB_PORT:-18200}"
 NMOS_PORT="${NMOS_PORT:-13252}"
 REG_PORT="${REG_PORT:-13220}"
@@ -69,9 +72,10 @@ writer "$TFF" 20000000-0000-4000-8000-000000000001 tff writer-tff.log
 writer "$BFF" 20000000-0000-4000-8000-000000000002 bff writer-bff.log
 writer "$LIE" 20000000-0000-4000-8000-000000000003 tff writer-lie.log
 LIE_WRITER=$!
+writer "$FRAMES" 20000000-0000-4000-8000-000000000005 p writer-frames.log
 
 for _ in $(seq 1 50); do
-  [[ -f "$DOMAIN/$LIE.mxl-flow/flow_def.json" ]] && break
+  [[ -f "$DOMAIN/$LIE.mxl-flow/flow_def.json" && -f "$DOMAIN/$FRAMES.mxl-flow/flow_def.json" ]] && break
   sleep 0.1
 done
 # Channel 3: the definition now says progressive at 50 grains per second, so a frame is 272 lines;
@@ -83,9 +87,18 @@ doc["interlace_mode"] = "progressive"
 doc["grain_rate"] = {"numerator": 50, "denominator": 1}
 json.dump(doc, open(sys.argv[1], "w"))
 PY
+# Channel 4: whole-frame grains (a progressive flow at 25 grains per second) under a definition that now
+# says interlaced_tff. The grains are larger than a field, so only MXL's own grain rate (25, not 50)
+# shows that they are not fields: format_mismatch.
+python3 - "$DOMAIN/$FRAMES.mxl-flow/flow_def.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["interlace_mode"] = "interlaced_tff"
+json.dump(doc, open(sys.argv[1], "w"))
+PY
 
 export MXL_DOMAIN_SCAN_PATH="$WORKDIR/mxl"
-export MONITOR_CHANNELS=3
+export MONITOR_CHANNELS=4
 export HOST_ID=integration
 export NMOS_SEED=integration-interlaced
 export NMOS_ENABLE=true
@@ -105,7 +118,7 @@ export ENCODER=x264
 # A field is 136 lines: the preview takes the first field alone.
 export MONITOR_PREVIEW_HEIGHT=136
 export MONITOR_VIDEO_BITRATE_KBPS=1500
-export CH1_OVERLAY=false CH2_OVERLAY=false CH3_OVERLAY=false
+export CH1_OVERLAY=false CH2_OVERLAY=false CH3_OVERLAY=false CH4_OVERLAY=false
 export LOG_LEVEL=info
 export READ_OFFSET_GRAINS=2
 export STATE_DIR="$WORKDIR/state"
@@ -144,6 +157,7 @@ route() {
 route 1 "$TFF"
 route 2 "$BFF"
 route 3 "$LIE"
+route 4 "$FRAMES"
 
 # field <channel> <name>: a field of the channel's status (video.<x> for the video leg).
 field() {
@@ -173,6 +187,7 @@ want_state() {
 want_state 1 running
 want_state 2 running
 want_state 3 unsupported
+want_state 4 unsupported
 
 check_eq() {
   [[ "$1" == "$2" ]] || { echo "$3: expected $2, got $1" >&2; exit 1; }
@@ -183,6 +198,8 @@ check_eq "$(field 2 interlace_mode)" "interlaced_bff" "ch2 interlace_mode"
 check_eq "$(field 1 field_preview)" "first_field" "ch1 field_preview"
 check_eq "$(field 3 video.reason)" "grain_too_small" "ch3 reason"
 check_eq "$(field 3 interlace_mode)" "progressive" "ch3 interlace_mode"
+check_eq "$(field 4 video.reason)" "format_mismatch" "ch4 reason"
+check_eq "$(field 4 interlace_mode)" "interlaced_tff" "ch4 interlace_mode"
 
 # The field rate in grains, the frame rate at the encoder.
 rates() {
@@ -294,7 +311,8 @@ rates 1
 alive
 check_eq "$(metric 'mxl_webrtc_monitor_video_unsupported_total{channel="3",reason="grain_too_small"}')" "1" "ch3 unsupported_total"
 check_eq "$(metric 'mxl_webrtc_monitor_channel_state{channel="3",kind="video",state="unsupported"}')" "1" "ch3 state metric"
-check_eq "$(grep -c '"event":"video_unsupported"' "$WORKDIR/monitor.log")" "1" "video_unsupported log lines"
+check_eq "$(metric 'mxl_webrtc_monitor_video_unsupported_total{channel="4",reason="format_mismatch"}')" "1" "ch4 unsupported_total"
+check_eq "$(grep -c '"event":"video_unsupported"' "$WORKDIR/monitor.log")" "2" "video_unsupported log lines (ch3, ch4)"
 check_eq "$(metric 'mxl_webrtc_monitor_video_unsupported_total{channel="1",reason="grain_too_small"}')" "0" "ch1 unsupported_total"
 
 # The writer re-creates the flow with a definition that fits its grains: channel 3 reads it.

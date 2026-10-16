@@ -13,6 +13,7 @@
 #include "ops/metrics.hpp"
 #include "util/jsonutil.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -188,6 +189,48 @@ TEST_CASE("the first-field picture equals 1.4.0's first-field conversion of a wh
     mwm::fieldsToPreview(top.data(), bottom.data(), width, height, false, 960, 540, false, woven, now.data());
     CHECK(now == before);
     CHECK(woven.empty()); // the first field alone needs no woven frame
+}
+
+TEST_CASE("first-field preview needs only the shown field")
+{
+    CHECK(mwm::requiredGrains(false, mwm::FieldPreview::FirstField) == 1);
+    CHECK(mwm::requiredGrains(true, mwm::FieldPreview::FirstField) == 1);
+    CHECK(mwm::requiredGrains(true, mwm::FieldPreview::Weave) == 2);
+
+    int const width = 96;
+    int const height = 64;
+    auto const first = solidRows(width, height / 2, 800);
+    auto const second = solidRows(width, height / 2, 560);
+    std::vector<std::uint8_t> woven;
+    for (bool bff : {false, true})
+    {
+        CAPTURE(bff);
+        // A missing second field (grain 2k + 1 not readable or invalid) gives the same first-field picture.
+        std::vector<std::uint8_t> both(mwm::previewBytes(width / 2, height / 2));
+        std::vector<std::uint8_t> alone(both.size(), 7);
+        mwm::fieldsToPreview(first.data(), second.data(), width, height, bff, width / 2, height / 2, false, woven, both.data());
+        mwm::fieldsToPreview(first.data(), nullptr, width, height, bff, width / 2, height / 2, false, woven, alone.data());
+        CHECK(alone == both);
+        // The woven picture needs both fields: without the second nothing is written (the reader never asks).
+        std::vector<std::uint8_t> full(mwm::previewBytes(width, height), 7);
+        mwm::fieldsToPreview(first.data(), nullptr, width, height, bff, width, height, false, woven, full.data());
+        CHECK(std::all_of(full.begin(), full.end(), [](std::uint8_t v) { return v == 7; }));
+    }
+}
+
+TEST_CASE("MXL's grain rate must say fields for an interlaced definition")
+{
+    // MXL keeps an interlaced flow at twice the definition's grain_rate.
+    CHECK(mwm::checkGrainRate(true, 25, 1, 50, 1).empty());
+    CHECK(mwm::checkGrainRate(true, 30000, 1001, 60000, 1001).empty());
+    CHECK(mwm::checkGrainRate(true, 25, 1, 100, 2).empty());
+    // Whole-frame grains (the flow was created progressive, flow_def.json now says interlaced).
+    CHECK(mwm::checkGrainRate(true, 25, 1, 25, 1) == "format_mismatch");
+    CHECK(mwm::checkGrainRate(true, 30000, 1001, 30000, 1001) == "format_mismatch");
+    CHECK(mwm::checkGrainRate(true, 25, 1, 100, 1) == "format_mismatch");
+    // Progressive definitions and an unknown MXL rate are not checked here.
+    CHECK(mwm::checkGrainRate(false, 25, 1, 50, 1).empty());
+    CHECK(mwm::checkGrainRate(true, 25, 1, 0, 0).empty());
 }
 
 TEST_CASE("unsupported state")

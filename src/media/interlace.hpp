@@ -48,12 +48,22 @@ enum class FieldPreview
 
 FieldPreview fieldPreviewMode(int height, int previewHeight);
 
+// How many grains of a unit (from its first) must be readable and valid to show it: the grain of a
+// progressive flow, the first field alone (FirstField: grain 2k + 1 may be missing or invalid) or
+// both fields (Weave).
+std::uint64_t requiredGrains(bool fields, FieldPreview mode);
+
+// MXL's own grain rate (mxlFlowConfigInfo.common.grainRate) against the definition: an interlaced
+// definition needs twice its grain_rate (one grain per field). Empty when it fits or MXL gives no rate,
+// else "format_mismatch" (e.g. whole-frame grains of a flow whose flow_def.json now says interlaced).
+std::string checkGrainRate(bool interlaced, std::int64_t defNum, std::int64_t defDen, std::int64_t mxlNum, std::int64_t mxlDen);
+
 char const* fieldPreviewName(FieldPreview mode);
 
 // The encoder's picture (8-bit 4:2:0, outWidth × outHeight) of frame k of an interlaced flow:
 // `first` is grain 2k, `second` grain 2k + 1 (each height / 2 lines of v210). FirstField scales the
-// first field as a progressive picture; Weave weaves the fields into `woven` (top field on the even
-// lines: `first` for tff, `second` for bff) and scales the frame.
+// first field as a progressive picture (`second` may be null); Weave weaves the fields into `woven`
+// (top field on the even lines: `first` for tff, `second` for bff) and scales the frame.
 void fieldsToPreview(std::uint8_t const* first, std::uint8_t const* second, int width, int height, bool bottomFieldFirst, int outWidth, int outHeight,
     bool nv12, std::vector<std::uint8_t>& woven, std::uint8_t* dst);
 } // namespace mwm

@@ -69,6 +69,20 @@ FieldPreview fieldPreviewMode(int height, int previewHeight)
     return previewHeight <= height / 2 ? FieldPreview::FirstField : FieldPreview::Weave;
 }
 
+std::uint64_t requiredGrains(bool fields, FieldPreview mode)
+{
+    return fields && mode == FieldPreview::Weave ? 2 : 1;
+}
+
+std::string checkGrainRate(bool interlaced, std::int64_t defNum, std::int64_t defDen, std::int64_t mxlNum, std::int64_t mxlDen)
+{
+    if (!interlaced || defNum <= 0 || defDen <= 0 || mxlNum <= 0 || mxlDen <= 0)
+    {
+        return {};
+    }
+    return mxlNum * defDen == 2 * defNum * mxlDen ? std::string{} : std::string{"format_mismatch"};
+}
+
 char const* fieldPreviewName(FieldPreview mode)
 {
     return mode == FieldPreview::FirstField ? "first_field" : "weave";
@@ -78,13 +92,17 @@ void fieldsToPreview(std::uint8_t const* first, std::uint8_t const* second, int 
     bool nv12, std::vector<std::uint8_t>& woven, std::uint8_t* dst)
 {
     int const fieldRows = height / 2;
-    if (first == nullptr || second == nullptr || fieldRows < 1)
+    if (first == nullptr || fieldRows < 1)
     {
         return;
     }
     if (fieldPreviewMode(height, outHeight) == FieldPreview::FirstField)
     {
         v210ToPreview(first, width, fieldRows, false, outWidth, outHeight, nv12, dst);
+        return;
+    }
+    if (second == nullptr)
+    {
         return;
     }
     auto const rowBytes = v210Stride(width);
