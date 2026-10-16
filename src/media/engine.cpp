@@ -2,6 +2,7 @@
 
 #include "channel/audio.hpp"
 #include "domain/scan.hpp"
+#include "media/interlace.hpp"
 #include "media/v210.hpp"
 #include "util/jsonutil.hpp"
 #include "util/logging.hpp"
@@ -61,12 +62,17 @@ struct VideoFormat
     int rateNum = 25;
     int rateDen = 1;
     bool interlaced = false;
+    bool bottomFieldFirst = false; // interlaced_bff: grain 2k is the bottom field
     bool alpha = false;
     std::string label;
+    std::string interlaceMode() const
+    {
+        return interlaced ? (bottomFieldFirst ? "interlaced_bff" : "interlaced_tff") : "progressive";
+    }
     std::string signature() const
     {
         return std::to_string(width) + "x" + std::to_string(height) + "@" + std::to_string(rateNum) + "/" + std::to_string(rateDen) +
-               (interlaced ? "i" : "p") + (alpha ? "a" : "");
+               (interlaced ? (bottomFieldFirst ? "ib" : "i") : "p") + (alpha ? "a" : "");
     }
 };
 
@@ -107,7 +113,9 @@ VideoFormat parseVideoDef(std::string const& text)
         }
     }
     auto const mode = json::fieldString(root, "interlace_mode");
+    // The grain_rate of an interlaced flow is its frame rate; MXL writes two fields per frame.
     format.interlaced = mode.rfind("interlaced", 0) == 0;
+    format.bottomFieldFirst = mode == "interlaced_bff";
     auto const media = json::fieldString(root, "media_type");
     format.alpha = media == "video/v210a";
     format.label = json::fieldString(root, "label");
@@ -691,7 +699,27 @@ private:
         overlayText_ = text;
     }
 
+    // A whole frame of v210 (a progressive grain or the slate) to the encoder.
     bool pushVideo(std::uint8_t const* data, std::size_t size, VideoFormat const& format)
+    {
+        if (size < v210FrameBytes(format.width, format.height))
+        {
+            return false;
+        }
+        return pushPicture([&](std::uint8_t* dst) { v210ToPreview(data, format.width, format.height, false, previewW_, previewH_, previewNv12_, dst); });
+    }
+
+    // Frame k of an interlaced flow: `first` is grain 2k, `second` grain 2k + 1 (one field each).
+    bool pushFields(std::uint8_t const* first, std::uint8_t const* second, VideoFormat const& format)
+    {
+        return pushPicture([&](std::uint8_t* dst) {
+            fieldsToPreview(first, second, format.width, format.height, format.bottomFieldFirst, previewW_, previewH_, previewNv12_, woven_, dst);
+        });
+    }
+
+    // One picture per frame at the flow's frame rate (an interlaced flow: per two fields).
+    template <typename Convert>
+    bool pushPicture(Convert const& convert)
     {
         std::lock_guard const lock{pipeMu_};
         if (vsrc_ == nullptr)
@@ -704,7 +732,7 @@ private:
         {
             droppedQueue_.fetch_add(1);
         }
-        if (size < v210FrameBytes(format.width, format.height) || previewW_ < 2 || previewH_ < 2)
+        if (previewW_ < 2 || previewH_ < 2)
         {
             return false;
         }
@@ -715,10 +743,10 @@ private:
             gst_buffer_unref(buffer);
             return false;
         }
-        v210ToPreview(data, format.width, format.height, format.interlaced, previewW_, previewH_, previewNv12_, map.data);
+        convert(map.data);
         gst_buffer_unmap(buffer, &map);
-        int const den = std::max(format.rateDen, 1);
-        int const num = std::max(format.rateNum, 1);
+        int const den = std::max(videoFormat_.rateDen, 1);
+        int const num = std::max(videoFormat_.rateNum, 1);
         GST_BUFFER_PTS(buffer) = gst_util_uint64_scale(videoFrames_, GST_SECOND * static_cast<std::uint64_t>(den), static_cast<std::uint64_t>(num));
         GST_BUFFER_DURATION(buffer) = gst_util_uint64_scale(1, GST_SECOND * static_cast<std::uint64_t>(den), static_cast<std::uint64_t>(num));
         lastVideoPts_.store(GST_BUFFER_PTS(buffer));
@@ -818,6 +846,7 @@ private:
         std::vector<std::uint8_t> slate;
         std::uint64_t lastIndex = 0;
         bool haveIndex = false;
+        std::string unsupportedKey; // flow, format and reason last logged as unsupported: one log line and count each
         auto lastGood = std::chrono::steady_clock::now() - std::chrono::seconds(5);
         while (running_.load())
         {
@@ -904,6 +933,8 @@ private:
                     formatString(format.height, format.interlaced, format.rateNum, format.rateDen), -1);
                 attempt = 0;
             }
+            book_.setScan(index_, format.interlaceMode(),
+                format.interlaced ? fieldPreviewName(fieldPreviewMode(format.height, settings.preview_height + settings.preview_height % 2)) : "");
             mxlFlowRuntimeInfo runtime{};
             mxlFlowConfigInfo info{};
             mxlFlowReaderGetRuntimeInfo(videoReader_, &runtime);
@@ -921,14 +952,21 @@ private:
                 sleepMs(static_cast<int>(std::min<std::uint64_t>(frameNs / 1000000ULL, 80)), route, LegKind::Video);
                 continue;
             }
+            // MXL 218ddaa stores an interlaced flow as one field per grain at twice the definition's
+            // grain_rate (1.4.1). The reader counts units: a grain, or a frame of two fields (grains 2k
+            // and 2k + 1). READ_OFFSET_GRAINS counts units, so the delay in time stays that of a
+            // progressive flow of the same frame rate, and one picture per frame goes to the encoder.
+            auto const layout = videoGrainLayout(format.width, format.height, format.interlaced);
+            std::uint64_t const unitGrains = layout.fields ? 2 : 1;
             std::uint64_t const head = runtime.headIndex;
+            std::uint64_t const headUnit = newestUnit(head, layout.fields);
             std::uint64_t const offset = static_cast<std::uint64_t>(std::max(0, cfg_.read_offset_grains));
-            std::uint64_t target = head > offset ? head - offset : 0;
-            if (haveIndex && head > lastIndex && info.discrete.grainCount > 0 && head - lastIndex > info.discrete.grainCount)
+            std::uint64_t target = headUnit > offset ? headUnit - offset : 0;
+            if (haveIndex && headUnit > lastIndex && info.discrete.grainCount > 0 && (headUnit - lastIndex) * unitGrains > info.discrete.grainCount)
             {
                 resyncs_.fetch_add(1);
                 droppedLate_.fetch_add(1);
-                target = head > offset ? head - offset : head;
+                target = headUnit > offset ? headUnit - offset : headUnit;
                 haveIndex = false;
             }
             std::uint64_t index = haveIndex ? lastIndex + 1 : target;
@@ -936,16 +974,27 @@ private:
             {
                 index = target;
             }
-            if (index > head)
+            if (index > headUnit)
             {
                 book_.setProbe(index_, LegKind::Video, true, true, std::chrono::steady_clock::now() - lastGood < std::chrono::milliseconds(500), "");
-                publishCounters(static_cast<double>(head - (haveIndex ? lastIndex : target)));
+                auto const lastGrain = firstGrainOfUnit(haveIndex ? lastIndex : target, layout.fields) + unitGrains - 1;
+                publishCounters(head > lastGrain ? static_cast<double>(head - lastGrain) : 0.0);
                 sleepMs(5, route, LegKind::Video);
                 continue;
             }
-            mxlGrainInfo grain{};
-            std::uint8_t* payload = nullptr;
-            auto const status = mxlFlowReaderGetGrainNonBlocking(videoReader_, index, &grain, &payload);
+            // The unit's grains: [0] the grain or the first field, [1] the second field.
+            std::uint64_t const firstGrain = firstGrainOfUnit(index, layout.fields);
+            mxlGrainInfo grains[2]{};
+            std::uint8_t* payloads[2] = {nullptr, nullptr};
+            mxlStatus status = MXL_STATUS_OK;
+            for (std::uint64_t i = 0; i < unitGrains && status == MXL_STATUS_OK; ++i)
+            {
+                status = mxlFlowReaderGetGrainNonBlocking(videoReader_, firstGrain + i, &grains[i], &payloads[i]);
+                if (status == MXL_STATUS_OK && payloads[i] == nullptr)
+                {
+                    status = MXL_ERR_UNKNOWN;
+                }
+            }
             if (status == MXL_ERR_OUT_OF_RANGE_TOO_LATE || status == MXL_ERR_FLOW_INVALID)
             {
                 droppedLate_.fetch_add(1);
@@ -964,15 +1013,53 @@ private:
                 sleepMs(5, route, LegKind::Video);
                 continue;
             }
-            if (status != MXL_STATUS_OK || payload == nullptr)
+            if (status != MXL_STATUS_OK)
             {
                 sleepMs(10, route, LegKind::Video);
                 continue;
             }
+            // Every grain is checked against the definition before it is read: a grain smaller than the
+            // definition says (a field where a frame was declared, a rewritten flow_def.json) never
+            // goes to the converter. The channel is `unsupported` and shows a slate; the flow is opened
+            // again so a writer that re-creates it with a fitting definition is read.
+            std::string problem;
+            for (std::uint64_t i = 0; i < unitGrains && problem.empty(); ++i)
+            {
+                problem = checkVideoGrain(layout, format.width, format.height, grains[i].grainSize);
+            }
+            if (!problem.empty())
+            {
+                auto const key = route.flow_id + "|" + format.signature() + "|" + problem;
+                bool const first = key != unsupportedKey;
+                if (first)
+                {
+                    unsupportedKey = key;
+                    log::warn("video_unsupported", {{"channel", std::to_string(index_)}, {"flow", route.flow_id}, {"reason", problem},
+                                                       {"grain_size", std::to_string(grains[0].grainSize)}, {"expected", std::to_string(layout.bytes)},
+                                                       {"width", std::to_string(format.width)}, {"height", std::to_string(format.height)},
+                                                       {"interlace_mode", format.interlaceMode()}});
+                }
+                book_.setUnsupported(index_, LegKind::Video, problem, first);
+                haveIndex = false;
+                mxlReleaseFlowReader(videoInstance_, videoReader_);
+                videoReader_ = nullptr;
+                videoFlow_.clear();
+                ensureSlate(format, slate);
+                pushVideo(slate.data(), slate.size(), format);
+                publishCounters(0);
+                sleepMs(200, route, LegKind::Video);
+                continue;
+            }
+            unsupportedKey.clear();
             lastIndex = index;
             haveIndex = true;
-            bool const valid = (grain.flags & MXL_GRAIN_FLAG_INVALID) == 0 && grain.validSlices == grain.totalSlices;
-            double const lag = static_cast<double>(head - index);
+            bool valid = true;
+            for (std::uint64_t i = 0; i < unitGrains; ++i)
+            {
+                valid = valid && (grains[i].flags & MXL_GRAIN_FLAG_INVALID) == 0 && grains[i].validSlices == grains[i].totalSlices;
+            }
+            std::uint64_t const lastGrain = firstGrain + unitGrains - 1;
+            double const lag = head > lastGrain ? static_cast<double>(head - lastGrain) : 0.0;
             if (!valid)
             {
                 book_.setProbe(index_, LegKind::Video, true, true, false, "");
@@ -981,27 +1068,23 @@ private:
                 publishCounters(lag);
                 continue;
             }
-            auto const ts = mxlIndexToTimestamp(&info.common.grainRate, index);
+            // The audio aligns to the start of the frame: the first field's time at the field rate.
+            auto const ts = mxlIndexToTimestamp(&info.common.grainRate, firstGrain);
             alignTimestamp_.store(ts);
             alignAtNs_.store(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
             frameSamples_.store(std::max(1, 48000 * format.rateDen / std::max(format.rateNum, 1)));
-            grainsRead_.fetch_add(1);
+            grainsRead_.fetch_add(unitGrains);
             lastGood = std::chrono::steady_clock::now();
             book_.setProbe(index_, LegKind::Video, true, true, true, "");
             book_.setFormat(index_, format.width, format.height, format.rateNum, format.rateDen, format.interlaced,
                 formatString(format.height, format.interlaced, format.rateNum, format.rateDen), -1);
-            ensureSlate(format, slate);
-            std::size_t const expect = slate.size();
-            std::size_t const got = std::min(expect, static_cast<std::size_t>(grain.grainSize));
-            if (got < expect)
+            if (layout.fields)
             {
-                std::memcpy(slate.data(), payload, got);
-                pushVideo(slate.data(), expect, format);
-                ensureSlate(format, slate);
+                pushFields(payloads[0], payloads[1], format);
             }
             else
             {
-                pushVideo(payload, expect, format);
+                pushVideo(payloads[0], static_cast<std::size_t>(grains[0].grainSize), format);
             }
             publishCounters(lag);
         }
@@ -1222,6 +1305,7 @@ private:
     int previewW_ = 0;
     int previewH_ = 0;
     bool previewNv12_ = false;
+    std::vector<std::uint8_t> woven_; // an interlaced frame's two fields woven (FieldPreview::Weave)
     GstElement* overlay_ = nullptr;
     std::optional<std::string> overlayText_; // the text overlay_ shows
     std::string pipeSig_;

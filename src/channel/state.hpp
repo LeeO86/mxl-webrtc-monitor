@@ -17,6 +17,8 @@ enum class RunState
     Waiting,
     NoSignal,
     Running,
+    // The flow's grains do not fit its definition (1.4.1): never read, a slate is shown.
+    Unsupported,
 };
 
 char const* stateName(RunState state);
@@ -29,6 +31,8 @@ struct LegInput
     bool domain_resolved = false;
     bool flow_open = false;
     bool grains_flowing = false;
+    bool unsupported = false;
+    std::string unsupported_reason;
 };
 
 struct LegEval

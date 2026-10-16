@@ -16,6 +16,8 @@ char const* stateName(RunState state)
         return "no_signal";
     case RunState::Running:
         return "running";
+    case RunState::Unsupported:
+        return "unsupported";
     }
     return "not_routed";
 }
@@ -38,6 +40,12 @@ LegEval evaluateLeg(LegInput const& input)
     {
         out.state = RunState::Waiting;
         out.reason = "flow_not_found";
+        return out;
+    }
+    if (input.unsupported)
+    {
+        out.state = RunState::Unsupported;
+        out.reason = input.unsupported_reason.empty() ? "unsupported" : input.unsupported_reason;
         return out;
     }
     if (!input.grains_flowing)

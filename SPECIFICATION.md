@@ -193,6 +193,16 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
   pushed sample; samples that are not there in time become silence.
 - If the reader falls behind beyond the ring (too late), it resynchronises to head
   minus offset and counts a `resync` (metric).
+- Interlaced flows (1.4.1): MXL stores one field per grain (`frame_height / 2` lines,
+  at twice the definition's `grain_rate`). Grain 2k is the first field of frame k
+  (top for `interlaced_tff`, bottom for `interlaced_bff`). The reader reads frames
+  (both fields), `READ_OFFSET_GRAINS` counts frames, and one picture per frame goes
+  to the encoder at the frame rate.
+- Every grain is checked against the flow definition before it is read. A grain
+  smaller than the definition's field or frame (`grain_too_small`), an interlaced
+  flow with an odd height (`odd_interlaced_height`) or no raster (`no_raster`) is
+  state `unsupported` with that reason: a slate, never a read past the grain. The
+  reader opens the flow again (200 ms) and resumes when the grains fit.
 - Format change of the source (new flow or changed `flow_def.json`): the channel
   rebuilds its pipeline. If the source mints a new flow id, the old id goes to
   `waiting`; following the new id is the controller's job (the crosspoint does
@@ -206,12 +216,13 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
 - v210 → raw video via the pinned MXL/GStreamer conversion path (CPU unpack, or a
   GPU path if available and simple; record the choice).
 - Scaling to the channel's preview size (`MONITOR_PREVIEW_HEIGHT`, default 540,
-  aspect preserved); interlaced sources are deinterlaced (simple, e.g. bob or
-  yadif-equivalent available in GStreamer).
+  aspect preserved). Interlaced sources (1.4.1): a preview not taller than a field
+  is the frame's first field alone (no combing); a taller preview is the two fields
+  woven. The channel status says which (`field_preview`).
 - Optional frame-rate decimation (`MONITOR_MAX_FPS`, default 0 = source rate).
 - Overlay (burned in, configurable on/off): channel label, source label (IS-04
   label of the sender, looked up in the registry), format string (e.g. `1080p50`).
-- Slate when `waiting`, `no_signal` or `not routed`: static frame with the channel
+- Slate when `waiting`, `no_signal`, `unsupported` or `not routed`: static frame with the channel
   label and the state text, at the last known (or default 25p) rate, so the player
   never stalls.
 
@@ -341,6 +352,11 @@ setting `tally_text` in each channel of `/api/v1/channels` and the events; `PATC
 
 Additions for previews (1.3.0, §5.7): `preview` (`path`, `state`, `error`) in each channel of
 `/api/v1/channels` and the events; the playback URLs carry the path prefix.
+
+Additions for interlaced input (1.4.1, §5.2): the leg state `unsupported` (with the reason);
+`interlace_mode` (`progressive`, `interlaced_tff`, `interlaced_bff`; null before a flow was
+opened) and `field_preview` (`first_field` or `weave`; null for a progressive flow) in each
+channel of `/api/v1/channels` and the events.
 
 ### 6.4 Ops endpoints
 
@@ -490,8 +506,8 @@ is not part of v1.
 | --- | --- | --- |
 | `info` | gauge (1) | version, mxl_version, encoder_available |
 | `simd_level` | gauge (1) | level (`avx2` or `scalar`: the preview conversion's code) |
-| `channel_state` | gauge (1 for current state) | channel, kind (video/audio), state |
-| `grains_read_total` | counter | channel |
+| `channel_state` | gauge (1 for current state) | channel, kind (video/audio), state (not_routed, waiting, no_signal, running, unsupported) |
+| `grains_read_total` | counter | channel (grains: an interlaced flow's fields) |
 | `grains_dropped_total` | counter | channel, reason (queue_full, too_late) |
 | `resyncs_total` | counter | channel |
 | `read_lag_grains` | gauge | channel |
@@ -503,6 +519,7 @@ is not part of v1.
 | `audio_peak_dbfs` | gauge | channel, input_channel (optional, off by default) |
 | `preview_mode` | gauge (1 for the mode) | mode (own/shared) |
 | `preview_publish_state` | gauge (1 for the current state) | channel, state (connecting/publishing/error) |
+| `video_unsupported_total` | counter | channel, reason (grain_too_small, odd_interlaced_height, no_raster) |
 
 A Grafana dashboard `deploy/grafana/mxl-webrtc-monitor.json` shows states, lag,
 drops, encode fps and latency, bitrate and viewers. mediamtx's own metrics are
@@ -564,6 +581,11 @@ scraped separately.
   mediamtx and checks that segments are produced; then stops the writer and checks
   `no_signal`; then activates a non-existent flow and checks `waiting`, creates
   the flow later and checks `running` without further action.
+- Interlaced (1.4.1): unit tests for the grain layout, the size check, frames from
+  field pairs, the weave and the preview picture (tff and bff); an integration run
+  with tff and bff writers that decodes the preview (frame rate, first field, woven
+  field order) and a flow whose definition does not fit its grains (`unsupported`,
+  then running when the flow is re-created).
 - Hardware check (documented, not in CI): NVENC on A4000 and L4, 4 and 16 channels,
   browser playback via WebRTC from an operator desk, HLS fallback with UDP blocked.
 

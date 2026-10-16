@@ -3,6 +3,7 @@
 #include "channel/state.hpp"
 #include "config/config.hpp"
 
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -18,6 +19,7 @@ struct LegRoute
     bool domain_resolved = false;
     bool flow_open = false;
     bool grains_flowing = false;
+    bool unsupported = false; // the grains do not fit the definition (reason says why)
     std::string reason;
     RunState state = RunState::NotRouted;
 };
@@ -34,6 +36,12 @@ struct ChannelView
     int rate_num = 25;
     int rate_den = 1;
     bool interlaced = false;
+    // The video flow's interlace_mode ("progressive", "interlaced_tff", "interlaced_bff"; empty before a
+    // flow was opened) and how an interlaced frame becomes the preview ("first_field" or "weave"; 1.4.1).
+    std::string interlace_mode;
+    std::string field_preview;
+    // Times the video input became unsupported, per reason (1.4.1).
+    std::map<std::string, std::uint64_t> unsupported_total;
     int audio_channels = 0;
     std::vector<double> peak_dbfs;
     std::vector<double> rms_dbfs;
@@ -74,6 +82,10 @@ public:
     void setRoute(int channel, LegKind kind, bool enable, std::string domainId, std::string flowId, std::string senderId);
     void setProbe(int channel, LegKind kind, bool domainResolved, bool flowOpen, bool flowing, std::string const& reason);
     void setFormat(int channel, int width, int height, int rateNum, int rateDen, bool interlaced, std::string const& format, int audioChannels);
+    // The video flow's grains do not fit its definition: state `unsupported` with `reason`. `count`
+    // adds one to unsupported_total (once per flow and reason, not per retry).
+    void setUnsupported(int channel, LegKind kind, std::string const& reason, bool count);
+    void setScan(int channel, std::string const& interlaceMode, std::string const& fieldPreview);
     void setEncoder(int channel, std::string const& encoder);
     void setCounters(int channel, std::uint64_t grains, std::uint64_t droppedQueue, std::uint64_t droppedLate, std::uint64_t resyncs, double lag, double fps, double bitrate);
     void setLevels(int channel, std::vector<double> peak, std::vector<double> rms);

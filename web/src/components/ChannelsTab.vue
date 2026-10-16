@@ -180,6 +180,13 @@ async function copy(text) {
         <dl class="kv">
           <dt>Source format</dt>
           <dd>{{ c.format || "–" }}<span v-if="c.width" class="muted"> ({{ c.width }}×{{ c.height }})</span></dd>
+          <template v-if="c.interlace_mode && c.interlace_mode !== 'progressive'">
+            <dt>Fields</dt>
+            <dd>
+              {{ c.interlace_mode === "interlaced_bff" ? "bottom field first" : "top field first" }} · preview
+              {{ c.field_preview === "weave" ? "from both fields, woven" : "from the first field" }}
+            </dd>
+          </template>
           <dt>Encoder</dt>
           <dd>{{ c.encoder || "–" }} · {{ c.preview_height }}p · {{ c.video_bitrate_kbps }} kbit/s</dd>
           <dt>Audio</dt>

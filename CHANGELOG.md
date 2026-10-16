@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.1
+
+Interlaced inputs. No setting changes are needed; progressive inputs are read as before.
+
+### Fixes
+
+- **Interlaced flows were shown squashed and the preview stalled.** MXL (218ddaa) stores an interlaced flow as one field per grain: half the frame's lines, at twice the definition's `grain_rate` (a 1080i25 flow has 50 grains per second). 1.4.0 took each field for a frame: the field filled the upper half of the picture (black below), and 50 pictures per second went to the encoder with 25 fps timestamps, so the RTSP publish waited longer and longer (lab, 1080i25 from mxl-test-player 1.2.1: the encoder at 2 fps after a few seconds, then 0; the page froze). Now the monitor reads both fields of a frame (grain 2k is the first field: top for `interlaced_tff`, bottom for `interlaced_bff`) and encodes one picture per frame at the frame rate. Lab, same source: 50 grains and 25 encoded frames per second, the browser plays 25.0 fps over WebRTC with no dropped frames, the whole picture.
+- **The preview of an interlaced frame** is its first field alone when the preview is not taller than a field (the default 540 lines from 1080i: every line it can show, no combing; the same bytes as 1.4.0's conversion of a whole tff frame), and the two fields woven when it is taller. `field_preview` in each channel says which (`first_field` or `weave`), `interlace_mode` the flow's field order; the Channels tab shows both.
+- **Every grain is checked against the flow definition before it is read.** Grains smaller than the definition's field or frame (`grain_too_small`, e.g. a `flow_def.json` that says progressive for a field flow), an interlaced flow with an odd height (`odd_interlaced_height`) or no raster (`no_raster`) put the video leg in the new state `unsupported` with that reason: a slate, one `video_unsupported` log line and one count in the new metric `mxl_webrtc_monitor_video_unsupported_total{channel,reason}` per flow and reason, never a read past the grain. The monitor opens the flow again every 200 ms and shows it once a writer re-creates it with a fitting definition. `mxl_webrtc_monitor_channel_state` has the state `unsupported`; the page shows it in red with the reason and a header pill. A progressive grain smaller than its frame was padded with black before; it is unsupported now.
+- For an interlaced flow `READ_OFFSET_GRAINS` counts frames (the delay in time stays that of a progressive flow of the same frame rate); `grains_read_total` and `read_lag_grains` count grains (fields).
+- `mxl-flow-writer` (test tool) writes interlaced flows (`tff` or `bff` as the ninth argument). `tests/integration/interlaced.sh` (CI) decodes the tff and bff previews and checks the rates, the first field, the woven field order and the unsupported flow.
+- The Compose and Kubernetes examples use the `1.4.1` image.
+
 ## 1.4.0
 
 The preview conversion with AVX2 (plan G). No setting changes are needed; the output is byte for byte the same.

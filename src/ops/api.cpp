@@ -232,7 +232,9 @@ std::string Api::channelsJson() const
         out << "{\"index\":" << view.settings.index << ",\"video_label\":" << jsonString(view.settings.video_label)
             << ",\"audio_label\":" << jsonString(view.settings.audio_label) << ",\"video\":" << leg(view.video) << ",\"audio\":" << leg(view.audio)
             << ",\"format\":" << jsonString(view.format) << ",\"encoder\":" << jsonString(view.encoder) << ",\"width\":" << view.width
-            << ",\"height\":" << view.height << ",\"audio_channels\":" << view.audio_channels << ",\"source_label\":" << jsonString(view.source_label)
+            << ",\"height\":" << view.height << ",\"interlace_mode\":" << (view.interlace_mode.empty() ? "null" : jsonString(view.interlace_mode))
+            << ",\"field_preview\":" << (view.field_preview.empty() ? "null" : jsonString(view.field_preview))
+            << ",\"audio_channels\":" << view.audio_channels << ",\"source_label\":" << jsonString(view.source_label)
             << ",\"preview_height\":" << view.settings.preview_height << ",\"video_bitrate_kbps\":" << view.settings.video_bitrate_kbps
             << ",\"audio_bitrate_kbps\":" << view.settings.audio_bitrate_kbps << ",\"max_fps\":" << view.settings.max_fps
             << ",\"audio_pair\":" << view.settings.audio_pair << ",\"downmix\":" << jsonString(view.settings.downmix)
