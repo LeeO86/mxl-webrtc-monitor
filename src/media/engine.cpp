@@ -945,6 +945,25 @@ private:
                                nowTai >= runtime.lastWriteTime && (nowTai - runtime.lastWriteTime) < frameNs * 3;
             if (!fresh)
             {
+                // 1.4.1: the head stopped. A writer that restarts may delete the flow and create it again
+                // under the same id (mxl-test-player keeps its flow ids), and this reader would keep the
+                // old one, frozen, for good. One non-blocking read past the head is too early on a live
+                // flow; MXL answers FLOW_INVALID when the flow's data file is gone or another one (also
+                // when the domain directory was made again). Then the flow is opened again.
+                if (runtime.headIndex != MXL_UNDEFINED_INDEX)
+                {
+                    mxlGrainInfo probe{};
+                    std::uint8_t* probePayload = nullptr;
+                    if (mxlFlowReaderGetGrainNonBlocking(videoReader_, runtime.headIndex + 1, &probe, &probePayload) == MXL_ERR_FLOW_INVALID)
+                    {
+                        log::info("flow_reopen", {{"channel", std::to_string(index_)}, {"kind", "video"}, {"flow", route.flow_id}});
+                        mxlReleaseFlowReader(videoInstance_, videoReader_);
+                        videoReader_ = nullptr;
+                        videoFlow_.clear();
+                        haveIndex = false;
+                        continue;
+                    }
+                }
                 book_.setProbe(index_, LegKind::Video, true, true, false, "");
                 ensureSlate(format, slate);
                 pushVideo(slate.data(), slate.size(), format);
@@ -1239,6 +1258,24 @@ private:
             bool const fresh = runtime.headIndex != MXL_UNDEFINED_INDEX && runtime.headIndex > 480 && steadyNow - audioHeadAt_ < std::chrono::milliseconds(500);
             if (!fresh)
             {
+                // 1.4.1: as for video, a stopped head may be a flow that was deleted and made again
+                // under the same id. One read past the head (at most every 80 ms) asks MXL.
+                if (runtime.headIndex != MXL_UNDEFINED_INDEX && steadyNow - audioProbeAt_ >= std::chrono::milliseconds(80))
+                {
+                    audioProbeAt_ = steadyNow;
+                    mxlWrappedMultiBufferSlice probe{};
+                    if (mxlFlowReaderGetSamplesNonBlocking(audioReader_, runtime.headIndex + 1, 1, &probe) == MXL_ERR_FLOW_INVALID)
+                    {
+                        log::info("flow_reopen", {{"channel", std::to_string(index_)}, {"kind", "audio"}, {"flow", route.flow_id}});
+                        mxlReleaseFlowReader(audioInstance_, audioReader_);
+                        audioReader_ = nullptr;
+                        audioFlow_.clear();
+                        audioCursor_.reset();
+                        audioWaitSince_.reset();
+                        pushSilence(due);
+                        continue;
+                    }
+                }
                 book_.setProbe(index_, LegKind::Audio, true, true, false, "");
                 audioCursor_.reset();
                 audioWaitSince_.reset();
@@ -1340,6 +1377,7 @@ private:
     std::string audioFlow_;
     std::uint64_t audioHeadSeen_ = MXL_UNDEFINED_INDEX;           // audio head at the last pass
     std::chrono::steady_clock::time_point audioHeadAt_{};         // when it last moved
+    std::chrono::steady_clock::time_point audioProbeAt_{};        // last stale-flow check (1.4.1)
     int audioChannels_ = 0;
     std::mutex pipeMu_;
     GstElement* pipeline_ = nullptr;

@@ -155,7 +155,8 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
 - `master_enable: false` stops the channel's pipeline and shows the "not routed"
   state.
 - The active connection is stored in `STATE_DIR/is05.json` and restored on the
-  next start. A missing or corrupt file is ignored.
+  next start, with the IS-04 receiver `subscription` that its activation sets (1.4.1).
+  A missing or corrupt file is ignored.
 - The IS-04 receiver `subscription` (`sender_id`, `active`) is updated on every
   activation, so the fabrics agent and the crosspoint see it.
 - Video and audio receivers of a channel are independent: audio may come from a
@@ -215,6 +216,13 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
   rebuilds its pipeline. If the source mints a new flow id, the old id goes to
   `waiting`; following the new id is the controller's job (the crosspoint does
   this for MXL receivers).
+- A writer that restarts may delete its flow and make it again under the same id
+  (mxl-test-player keeps its flow ids), possibly with its domain directory. When a
+  flow's head has stopped, the reader asks MXL once per pass (video, at most every
+  80 ms for audio) whether the flow on disk is still the one it reads (a
+  non-blocking read past the head: `FLOW_INVALID` when it is gone or another one)
+  and then opens it again (1.4.1; log `flow_reopen`). The channel runs again within
+  a few frames of the new writer; the pipeline is kept when the format is the same.
 - The reader runs on its own thread per flow; GStreamer pushes never block the
   reader thread for longer than one grain (bounded `appsrc` queue, leaky: drop
   oldest), so a slow encoder cannot stall MXL reading.

@@ -82,7 +82,8 @@ writer "$FRAMES" 20000000-0000-4000-8000-000000000005 p writer-frames.log
 mkdir -p "$SHORT_DOMAIN"
 echo '{"urn:x-mxl:option:history_duration/v1.0":60000000}' >"$SHORT_DOMAIN/options.json"
 "$WRITER" "$SHORT_DOMAIN" "$SHORT_DOMAIN_ID" "$SHORT" 20000000-0000-4000-8000-000000000006 300 "$WIDTH" "$HEIGHT" 25 tff >"$WORKDIR/writer-short.log" 2>&1 &
-PIDS+=($!)
+SHORT_WRITER=$!
+PIDS+=($SHORT_WRITER)
 
 for _ in $(seq 1 50); do
   [[ -f "$DOMAIN/$LIE.mxl-flow/flow_def.json" && -f "$DOMAIN/$FRAMES.mxl-flow/flow_def.json" ]] && break
@@ -157,14 +158,16 @@ for _ in $(seq 1 80); do
   sleep 0.25
 done
 
+# route <channel> <flow> [domain] [sender]: IS-05 PATCH of the channel's video receiver.
 route() {
-  local channel="$1" flow="$2" domain="${3:-$DOMAIN_ID}" rx
+  local channel="$1" flow="$2" domain="${3:-$DOMAIN_ID}" sender="${4:-}" rx
   rx="$(python3 -c 'import json,sys; print(next(r["id"] for r in json.load(open(sys.argv[1])) if r["label"] == "Monitor %s Video" % sys.argv[2]))' "$WORKDIR/receivers.json" "$channel")"
   curl -sf -X PATCH "http://127.0.0.1:${NMOS_PORT}/x-nmos/connection/v1.2/single/receivers/${rx}/staged" \
     -H 'Content-Type: application/json' \
-    -d "{\"master_enable\":true,\"activation\":{\"mode\":\"activate_immediate\"},\"transport_params\":[{\"mxl_domain_id\":\"${domain}\",\"mxl_flow_id\":\"${flow}\"}]}" >/dev/null
+    -d "{\"master_enable\":true,${sender:+\"sender_id\":\"$sender\",}\"activation\":{\"mode\":\"activate_immediate\"},\"transport_params\":[{\"mxl_domain_id\":\"${domain}\",\"mxl_flow_id\":\"${flow}\"}]}" >/dev/null
 }
-route 1 "$TFF"
+SENDER1="30000000-0000-4000-8000-000000000001"
+route 1 "$TFF" "$DOMAIN_ID" "$SENDER1"
 route 2 "$BFF"
 route 3 "$LIE"
 route 4 "$FRAMES"
@@ -368,6 +371,7 @@ expect 3 recovered 136 200 80
 builds5="$(grep -c '"event":"pipeline_playing","channel":"5"' "$WORKDIR/monitor.log")"
 SHORT_FIXED="10000000-0000-4000-8000-000000000008"
 writer "$SHORT_FIXED" 20000000-0000-4000-8000-000000000008 tff writer-short-fixed.log
+FIXED_WRITER=$!
 for _ in $(seq 1 50); do
   [[ -f "$DOMAIN/$SHORT_FIXED.mxl-flow/flow_def.json" ]] && break
   sleep 0.1
@@ -378,8 +382,81 @@ check_eq "$(grep -c '"event":"pipeline_playing","channel":"5"' "$WORKDIR/monitor
 rates 5
 expect 5 short-recovered 136 200 80
 
+# recover_after <writer pid> <dir> <command...>: the writer stops (killed, as in a crash), ch5 goes to
+# no_signal, <dir> is deleted and the writer starts again with the same ids; prints how long ch5 took
+# to run again and expects at most 2 s (the reader notices the stopped head after 3 frames and asks MXL
+# whether the flow on disk is still the one it reads).
+recover_after() {
+  local pid="$1" dir="$2"
+  shift 2
+  kill -9 "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  want_state 5 no_signal
+  rm -rf "$dir"
+  "$@"
+  local t0 t1
+  t0="$(date +%s%N)"
+  for _ in $(seq 1 100); do
+    [[ "$(field 5 video.state)" == "running" ]] && break
+    sleep 0.05
+  done
+  t1="$(date +%s%N)"
+  check_eq "$(field 5 video.state)" "running" "ch5 after its flow was made again"
+  python3 -c 'import sys; s = (int(sys.argv[2]) - int(sys.argv[1])) / 1e9; print(f"ch5 running again {s:.2f} s after the writer restarted"); sys.exit(0 if s <= 2.0 else "too slow")' "$t0" "$t1"
+}
+
+# A writer restart that deletes the flow and makes it again under the same id, in the same domain
+# (mxl-test-player keeps its flow ids). 1.4.0 kept reading the deleted flow: no_signal for good.
+restart_fixed() {
+  writer "$SHORT_FIXED" 20000000-0000-4000-8000-000000000008 tff writer-short-fixed2.log
+}
+recover_after "$FIXED_WRITER" "$DOMAIN/$SHORT_FIXED.mxl-flow" restart_fixed
+check_eq "$(grep -c '"event":"pipeline_playing","channel":"5"' "$WORKDIR/monitor.log")" "$builds5" "ch5 pipeline builds (same format, no rebuild)"
+expect 5 same-id 136 200 80
+
+# The same with the domain directory made again (a writer that removes its own domain on exit),
+# here in the short domain, now keeping 200 ms.
+route 5 "$SHORT" "$SHORT_DOMAIN_ID"
+restart_short() {
+  mkdir -p "$SHORT_DOMAIN"
+  echo '{"urn:x-mxl:option:history_duration/v1.0":200000000}' >"$SHORT_DOMAIN/options.json"
+  "$WRITER" "$SHORT_DOMAIN" "$SHORT_DOMAIN_ID" "$SHORT" 20000000-0000-4000-8000-000000000006 300 "$WIDTH" "$HEIGHT" 25 tff >"$WORKDIR/writer-short2.log" 2>&1 &
+  PIDS+=($!)
+}
+recover_after "$SHORT_WRITER" "$SHORT_DOMAIN" restart_short
+expect 5 domain-again 136 200 80
+
 alive
 kill -TERM "$MONITOR_PID"
 wait "$MONITOR_PID" && CODE=0 || CODE=$?
 check_eq "$CODE" "143" "exit status on SIGTERM"
+
+# IS-04 and IS-05 agree after a restart that restores the routes from is05.json (1.4.1: 1.4.0 left
+# the IS-04 subscription inactive and without the sender).
+"$BIN" >"$WORKDIR/monitor2.log" 2>&1 &
+MONITOR_PID=$!
+PIDS+=("$MONITOR_PID")
+for _ in $(seq 1 80); do
+  alive
+  curl -sf "http://127.0.0.1:${NMOS_PORT}/x-nmos/node/v1.3/receivers" >"$WORKDIR/receivers2.json" 2>/dev/null && break
+  sleep 0.25
+done
+RX1="$(python3 -c 'import json,sys; print(next(r["id"] for r in json.load(open(sys.argv[1])) if r["label"] == "Monitor 1 Video"))' "$WORKDIR/receivers2.json")"
+curl -sf "http://127.0.0.1:${NMOS_PORT}/x-nmos/connection/v1.2/single/receivers/${RX1}/active" >"$WORKDIR/active1.json"
+python3 - "$WORKDIR/receivers2.json" "$WORKDIR/active1.json" "$RX1" "$SENDER1" <<'PY'
+import json, sys
+receivers, active, rx, sender = json.load(open(sys.argv[1])), json.load(open(sys.argv[2])), sys.argv[3], sys.argv[4]
+sub = next(r for r in receivers if r["id"] == rx)["subscription"]
+print(f"ch1 after restart: IS-05 active master_enable={active['master_enable']} sender_id={active['sender_id']}; IS-04 subscription {sub}")
+if not (active["master_enable"] is True and active["sender_id"] == sender):
+    raise SystemExit("IS-05 /active was not restored")
+if not (sub.get("active") is True and sub.get("sender_id") == sender):
+    raise SystemExit("the IS-04 subscription does not match IS-05 /active")
+others = [r for r in receivers if r["label"].endswith("Audio")]
+if any(r["subscription"].get("active") for r in others):
+    raise SystemExit("an unrouted receiver's IS-04 subscription is active")
+PY
+kill -TERM "$MONITOR_PID"
+wait "$MONITOR_PID" && CODE=0 || CODE=$?
+check_eq "$CODE" "143" "exit status on SIGTERM after the restart"
 echo "interlaced integration ok"
