@@ -205,6 +205,8 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
   (both fields), `READ_OFFSET_GRAINS` counts frames, and one picture per frame goes
   to the encoder at the frame rate. With the first-field preview (§5.3) only grain
   2k must be there and valid; the woven preview needs both.
+  Interlaced video and its ANC follow the shared MXL interlaced convention:
+  https://github.com/LeeO86/mxl-multiviewer/blob/main/docs/mxl-interlaced.md
 - Every grain is checked against the flow definition before it is read. A grain
   smaller than the definition's field or frame (`grain_too_small`), an interlaced
   flow with an odd height (`odd_interlaced_height`) or no raster (`no_raster`) is
