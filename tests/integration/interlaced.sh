@@ -4,12 +4,14 @@
 # into the upper half, pushed at twice the frame rate, so the preview stalled). Four channels:
 #   ch1 a 480x272 i25 tff flow, ch2 the same bff, ch3 a tff flow whose flow_def.json was rewritten to
 #   say progressive (a grain smaller than the definition says), ch4 a progressive flow whose
-#   flow_def.json was rewritten to say interlaced_tff (whole frames, not fields: format_mismatch).
+#   flow_def.json was rewritten to say interlaced_tff (whole frames, not fields: format_mismatch), ch5 a
+#   tff flow in a domain that keeps only 3 fields (60 ms): READ_OFFSET_GRAINS=2 frames is always too late.
 # Checks: ch1 and ch2 run at the field rate (grains) and the frame rate (encoder, stream timestamps),
 # the decoded preview is the first field over the whole picture (preview height <= a field), then the
 # woven frame (preview height = the frame); ch3 is `unsupported` (grain_too_small), counted and logged
-# once, ch4 is `unsupported` (format_mismatch), the process stays up, and ch3 recovers when its writer
-# re-creates the flow.
+# once, ch4 is `unsupported` (format_mismatch), ch5 is `no_signal` with a published slate and waits a
+# grain per too-late read (1.4.0 retried at once: one core busy, the channel left in `waiting`), the
+# process stays up, and ch3 recovers when its writer re-creates the flow.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -23,6 +25,9 @@ TFF="10000000-0000-4000-8000-000000000001"
 BFF="10000000-0000-4000-8000-000000000002"
 LIE="10000000-0000-4000-8000-000000000003"
 FRAMES="10000000-0000-4000-8000-000000000005"
+SHORT_DOMAIN="$WORKDIR/mxl/short"
+SHORT_DOMAIN_ID="bbbbbbbb-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+SHORT="10000000-0000-4000-8000-000000000006"
 WEB_PORT="${WEB_PORT:-18200}"
 NMOS_PORT="${NMOS_PORT:-13252}"
 REG_PORT="${REG_PORT:-13220}"
@@ -73,6 +78,11 @@ writer "$BFF" 20000000-0000-4000-8000-000000000002 bff writer-bff.log
 writer "$LIE" 20000000-0000-4000-8000-000000000003 tff writer-lie.log
 LIE_WRITER=$!
 writer "$FRAMES" 20000000-0000-4000-8000-000000000005 p writer-frames.log
+# Channel 5: a domain whose flows keep 60 ms (3 fields at 50 per second).
+mkdir -p "$SHORT_DOMAIN"
+echo '{"urn:x-mxl:option:history_duration/v1.0":60000000}' >"$SHORT_DOMAIN/options.json"
+"$WRITER" "$SHORT_DOMAIN" "$SHORT_DOMAIN_ID" "$SHORT" 20000000-0000-4000-8000-000000000006 300 "$WIDTH" "$HEIGHT" 25 tff >"$WORKDIR/writer-short.log" 2>&1 &
+PIDS+=($!)
 
 for _ in $(seq 1 50); do
   [[ -f "$DOMAIN/$LIE.mxl-flow/flow_def.json" && -f "$DOMAIN/$FRAMES.mxl-flow/flow_def.json" ]] && break
@@ -98,7 +108,7 @@ json.dump(doc, open(sys.argv[1], "w"))
 PY
 
 export MXL_DOMAIN_SCAN_PATH="$WORKDIR/mxl"
-export MONITOR_CHANNELS=4
+export MONITOR_CHANNELS=5
 export HOST_ID=integration
 export NMOS_SEED=integration-interlaced
 export NMOS_ENABLE=true
@@ -118,7 +128,7 @@ export ENCODER=x264
 # A field is 136 lines: the preview takes the first field alone.
 export MONITOR_PREVIEW_HEIGHT=136
 export MONITOR_VIDEO_BITRATE_KBPS=1500
-export CH1_OVERLAY=false CH2_OVERLAY=false CH3_OVERLAY=false CH4_OVERLAY=false
+export CH1_OVERLAY=false CH2_OVERLAY=false CH3_OVERLAY=false CH4_OVERLAY=false CH5_OVERLAY=false
 export LOG_LEVEL=info
 export READ_OFFSET_GRAINS=2
 export STATE_DIR="$WORKDIR/state"
@@ -148,16 +158,17 @@ for _ in $(seq 1 80); do
 done
 
 route() {
-  local channel="$1" flow="$2" rx
+  local channel="$1" flow="$2" domain="${3:-$DOMAIN_ID}" rx
   rx="$(python3 -c 'import json,sys; print(next(r["id"] for r in json.load(open(sys.argv[1])) if r["label"] == "Monitor %s Video" % sys.argv[2]))' "$WORKDIR/receivers.json" "$channel")"
   curl -sf -X PATCH "http://127.0.0.1:${NMOS_PORT}/x-nmos/connection/v1.2/single/receivers/${rx}/staged" \
     -H 'Content-Type: application/json' \
-    -d "{\"master_enable\":true,\"activation\":{\"mode\":\"activate_immediate\"},\"transport_params\":[{\"mxl_domain_id\":\"${DOMAIN_ID}\",\"mxl_flow_id\":\"${flow}\"}]}" >/dev/null
+    -d "{\"master_enable\":true,\"activation\":{\"mode\":\"activate_immediate\"},\"transport_params\":[{\"mxl_domain_id\":\"${domain}\",\"mxl_flow_id\":\"${flow}\"}]}" >/dev/null
 }
 route 1 "$TFF"
 route 2 "$BFF"
 route 3 "$LIE"
 route 4 "$FRAMES"
+route 5 "$SHORT" "$SHORT_DOMAIN_ID"
 
 # field <channel> <name>: a field of the channel's status (video.<x> for the video leg).
 field() {
@@ -188,6 +199,7 @@ want_state 1 running
 want_state 2 running
 want_state 3 unsupported
 want_state 4 unsupported
+want_state 5 no_signal
 
 check_eq() {
   [[ "$1" == "$2" ]] || { echo "$3: expected $2, got $1" >&2; exit 1; }
@@ -223,6 +235,20 @@ PY
 }
 rates 1
 rates 2
+
+# Channel 5 is read too late every time: a slate is published and each retry waits one field.
+check_eq "$(field 5 preview.state)" "publishing" "ch5 preview (slate)"
+r0="$(metric 'mxl_webrtc_monitor_resyncs_total{channel="5"}')"
+sleep 3
+r1="$(metric 'mxl_webrtc_monitor_resyncs_total{channel="5"}')"
+python3 - "$r0" "$r1" <<'PY'
+import sys
+rate = (float(sys.argv[2]) - float(sys.argv[1])) / 3
+print(f"ch5: {rate:.0f} too-late retries per second")
+if not 1 <= rate <= 60:
+    raise SystemExit(f"ch5: {rate} too-late retries per second (expected at most one per field, 50)")
+PY
+check_eq "$(field 5 video.state)" "no_signal" "ch5 state"
 
 # grab <channel> <name>: decode the channel's RTSP stream for 5 s; prints the stream's frame rate (its
 # timestamps) and the mean luma of the upper and the lower half's middle band of the last picture.

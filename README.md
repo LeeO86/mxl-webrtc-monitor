@@ -37,7 +37,7 @@ Environment, then `MONITOR_CONFIG_FILE`, then the defaults below. Unknown enviro
 | `MONITOR_MAX_FPS` | 0 | 0 = source rate |
 | `MONITOR_VIDEO_BITRATE_KBPS` | 2000 | per channel |
 | `MONITOR_AUDIO_BITRATE_KBPS` | 128 | per channel |
-| `READ_OFFSET_GRAINS` | 2 | read behind head (frames for an interlaced flow) |
+| `READ_OFFSET_GRAINS` | 2 | read behind head (frames for an interlaced flow). Must stay inside the flow's ring (MXL default 200 ms: 5 grains at 25p); beyond it every read is too late and the channel is `no_signal` |
 | `ENCODER` | `auto` | `auto`, `nvenc`, `x264` |
 | `MONITOR_PUBLIC_IP` | first non-loopback IPv4 | ICE host. Alias source for `NMOS_HOST_ADDRESS` |
 | `NMOS_HOST_ADDRESS` | `MONITOR_PUBLIC_IP` | IP on the IS-04 href, API endpoints and IS-05 control hrefs |

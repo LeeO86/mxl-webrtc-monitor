@@ -1045,27 +1045,37 @@ private:
                 }
                 ++fetched;
             }
-            if (status == MXL_ERR_OUT_OF_RANGE_TOO_LATE || status == MXL_ERR_FLOW_INVALID)
-            {
-                droppedLate_.fetch_add(1);
-                resyncs_.fetch_add(1);
-                haveIndex = false;
-                if (status == MXL_ERR_FLOW_INVALID && videoReader_ != nullptr)
-                {
-                    mxlReleaseFlowReader(videoInstance_, videoReader_);
-                    videoReader_ = nullptr;
-                    videoFlow_.clear();
-                }
-                continue;
-            }
-            if (status == MXL_ERR_OUT_OF_RANGE_TOO_EARLY || status == MXL_ERR_TIMEOUT)
-            {
-                sleepMs(5, route, LegKind::Video);
-                continue;
-            }
             if (status != MXL_STATUS_OK)
             {
-                sleepMs(10, route, LegKind::Video);
+                bool const late = status == MXL_ERR_OUT_OF_RANGE_TOO_LATE || status == MXL_ERR_FLOW_INVALID;
+                if (late)
+                {
+                    droppedLate_.fetch_add(1);
+                    resyncs_.fetch_add(1);
+                    haveIndex = false;
+                    if (status == MXL_ERR_FLOW_INVALID && videoReader_ != nullptr)
+                    {
+                        mxlReleaseFlowReader(videoInstance_, videoReader_);
+                        videoReader_ = nullptr;
+                        videoFlow_.clear();
+                    }
+                }
+                // 1.4.1: every failed read updates the state and waits. 1.4.0 retried a too-late read at
+                // once, without either: a reader that stays too late (READ_OFFSET_GRAINS beyond the
+                // flow's ring) spun a core and left the channel in its last state (`waiting` right after
+                // a route) with no picture published. Now it is `no_signal` with a slate after 500 ms
+                // without a good grain, and a too-late retry waits one grain.
+                bool const recent = std::chrono::steady_clock::now() - lastGood < std::chrono::milliseconds(500);
+                book_.setProbe(index_, LegKind::Video, true, true, recent, "");
+                if (!recent)
+                {
+                    ensureSlate(format, slate);
+                    pushVideo(slate.data(), slate.size(), format);
+                }
+                publishCounters(head > firstGrain ? static_cast<double>(head - firstGrain) : 0.0);
+                int const grainMs = static_cast<int>(std::max<std::uint64_t>(1, frameNs / unitGrains / 1000000ULL));
+                bool const early = status == MXL_ERR_OUT_OF_RANGE_TOO_EARLY || status == MXL_ERR_TIMEOUT;
+                sleepMs(late ? grainMs : early ? 5 : 10, route, LegKind::Video);
                 continue;
             }
             // Every grain is checked against the definition before it is read: a grain smaller than the
