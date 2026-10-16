@@ -221,8 +221,12 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
   flow's head has stopped, the reader asks MXL once per pass (video, at most every
   80 ms for audio) whether the flow on disk is still the one it reads (a
   non-blocking read past the head: `FLOW_INVALID` when it is gone or another one)
-  and then opens it again (1.4.1; log `flow_reopen`). The channel runs again within
-  a few frames of the new writer; the pipeline is kept when the format is the same.
+  and then opens it again (1.4.1; log `flow_reopen`, at most one per frame). The
+  pipeline is kept when the format is the same. When the new flow is already there,
+  the channel runs again within a few frames. While the flow is gone the channel is
+  `waiting` (`flow_not_found`; 1.4.0 kept `no_signal` on the deleted flow) and
+  retries with the backoff (250 ms doubling to 5 s), so after a long gap it can take
+  up to about 5 s.
 - The reader runs on its own thread per flow; GStreamer pushes never block the
   reader thread for longer than one grain (bounded `appsrc` queue, leaky: drop
   oldest), so a slow encoder cannot stall MXL reading.

@@ -961,6 +961,8 @@ private:
                         videoReader_ = nullptr;
                         videoFlow_.clear();
                         haveIndex = false;
+                        // At most one reopen per frame, even if MXL keeps answering FLOW_INVALID.
+                        sleepMs(static_cast<int>(std::clamp<std::uint64_t>(frameNs / 1000000ULL, 1, 80)), route, LegKind::Video);
                         continue;
                     }
                 }
@@ -1273,6 +1275,8 @@ private:
                         audioCursor_.reset();
                         audioWaitSince_.reset();
                         pushSilence(due);
+                        // At most one reopen per frame, even if MXL keeps answering FLOW_INVALID.
+                        sleepMs(std::clamp(frameSamples_.load() * 1000 / 48000, 1, 80), route, LegKind::Audio);
                         continue;
                     }
                 }

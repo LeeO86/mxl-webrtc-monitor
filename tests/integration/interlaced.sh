@@ -386,12 +386,19 @@ expect 5 short-recovered 136 200 80
 # no_signal, <dir> is deleted and the writer starts again with the same ids; prints how long ch5 took
 # to run again and expects at most 2 s (the reader notices the stopped head after 3 frames and asks MXL
 # whether the flow on disk is still the one it reads).
+# <max reopens> is how many flow_reopen lines ch5 may log for it: none while the killed writer's flow
+# still exists, one when the flow is deleted and made again.
+reopens5() { grep -c '"event":"flow_reopen","channel":"5"' "$WORKDIR/monitor.log" || true; }
 recover_after() {
-  local pid="$1" dir="$2"
-  shift 2
+  local pid="$1" dir="$2" min="$3" max="$4"
+  shift 4
+  local before
+  before="$(reopens5)"
   kill -9 "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   want_state 5 no_signal
+  sleep 0.5
+  check_eq "$(reopens5)" "$before" "ch5 flow_reopen lines while the stopped writer's flow still exists"
   rm -rf "$dir"
   "$@"
   local t0 t1
@@ -403,6 +410,9 @@ recover_after() {
   t1="$(date +%s%N)"
   check_eq "$(field 5 video.state)" "running" "ch5 after its flow was made again"
   python3 -c 'import sys; s = (int(sys.argv[2]) - int(sys.argv[1])) / 1e9; print(f"ch5 running again {s:.2f} s after the writer restarted"); sys.exit(0 if s <= 2.0 else "too slow")' "$t0" "$t1"
+  local n=$(( $(reopens5) - before ))
+  echo "ch5: $n flow_reopen"
+  [[ "$n" -ge "$min" && "$n" -le "$max" ]] || { echo "ch5: $n flow_reopen lines, expected $min to $max" >&2; exit 1; }
 }
 
 # A writer restart that deletes the flow and makes it again under the same id, in the same domain
@@ -410,7 +420,7 @@ recover_after() {
 restart_fixed() {
   writer "$SHORT_FIXED" 20000000-0000-4000-8000-000000000008 tff writer-short-fixed2.log
 }
-recover_after "$FIXED_WRITER" "$DOMAIN/$SHORT_FIXED.mxl-flow" restart_fixed
+recover_after "$FIXED_WRITER" "$DOMAIN/$SHORT_FIXED.mxl-flow" 1 1 restart_fixed
 check_eq "$(grep -c '"event":"pipeline_playing","channel":"5"' "$WORKDIR/monitor.log")" "$builds5" "ch5 pipeline builds (same format, no rebuild)"
 expect 5 same-id 136 200 80
 
@@ -423,7 +433,8 @@ restart_short() {
   "$WRITER" "$SHORT_DOMAIN" "$SHORT_DOMAIN_ID" "$SHORT" 20000000-0000-4000-8000-000000000006 300 "$WIDTH" "$HEIGHT" 25 tff >"$WORKDIR/writer-short2.log" 2>&1 &
   PIDS+=($!)
 }
-recover_after "$SHORT_WRITER" "$SHORT_DOMAIN" restart_short
+# The domain scan may notice the missing directory first (no flow_reopen) or the probe (one).
+recover_after "$SHORT_WRITER" "$SHORT_DOMAIN" 0 1 restart_short
 expect 5 domain-again 136 200 80
 
 alive
