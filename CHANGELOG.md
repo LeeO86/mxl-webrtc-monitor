@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.2
+
+### Fixes
+
+- **The video receivers' NMOS caps accept `interlaced_bff`.** The BCP-004-01 constraint set for 1080 lines listed `progressive` and `interlaced_tff` only, although the reader shows bottom-field-first flows correctly since 1.4.1, so a controller that checks caps refused a bff sender (e.g. mxl-test-player's `1080i25bff`). It now lists `progressive`, `interlaced_tff` and `interlaced_bff`; 2160 lines stay `progressive`. Nothing else changes.
+- `tests/integration/monitor.sh` checks the video receiver's interlace modes in the IS-04 caps.
+- The Compose and Kubernetes examples use the `1.4.2` image.
+
 ## 1.4.1
 
 Interlaced inputs. No setting changes are needed; progressive inputs are read as before.

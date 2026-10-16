@@ -128,7 +128,7 @@ The process writes `MEDIAMTX_CONFIG_PATH` in both modes. A 1.2.0 deployment with
 
 ## Interlaced inputs
 
-MXL stores an interlaced flow as one field per grain: half the frame's lines, at twice the flow definition's `grain_rate` (a 1080i flow declared at 25/1 has 50 grains per second). Grain 2k is the first field of frame k: the top field for `interlaced_tff`, the bottom field for `interlaced_bff`. The monitor reads both fields of a frame and encodes one picture per frame, at the frame rate (`1080i50` in the format text is 25 frames per second). `READ_OFFSET_GRAINS` counts frames for such a flow; `grains_read_total` counts fields.
+MXL stores an interlaced flow as one field per grain: half the frame's lines, at twice the flow definition's `grain_rate` (a 1080i flow declared at 25/1 has 50 grains per second). Grain 2k is the first field of frame k: the top field for `interlaced_tff`, the bottom field for `interlaced_bff`. The monitor reads both fields of a frame and encodes one picture per frame, at the frame rate (`1080i50` in the format text is 25 frames per second). The video receivers' NMOS caps list `progressive`, `interlaced_tff` and `interlaced_bff` for 1080 lines and `progressive` for 2160. `READ_OFFSET_GRAINS` counts frames for such a flow; `grains_read_total` counts fields.
 
 A preview not taller than a field (the default 540 lines from 1080i) is the frame's first field alone: every line the preview can show, without combing; only that field has to be there and valid. A taller preview (`preview_height` above half the source height) weaves the two fields into the frame, which shows combing on motion. The channel's `field_preview` says which (`first_field` or `weave`), `interlace_mode` the flow's field order.
 
