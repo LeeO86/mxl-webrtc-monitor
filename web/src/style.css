@@ -151,6 +151,7 @@ a { color: var(--accent); }
 .state-tag.running { background: var(--ok); color: #08240f; }
 .state-tag.no_signal, .state-tag.waiting { background: var(--warn); color: #20180a; }
 .state-tag.not_routed { background: #5d6b7a; color: #fff; }
+.state-tag.unsupported { background: var(--bad); color: #fff; }
 .seg button .state-tag { margin-left: .45rem; font-size: .6rem; padding: 0 .3rem; }
 
 /* Pictures: the WHEP/HLS player of a channel */

@@ -13,6 +13,8 @@ void refresh(LegRoute& leg)
     input.domain_resolved = leg.domain_resolved;
     input.flow_open = leg.flow_open;
     input.grains_flowing = leg.grains_flowing;
+    input.unsupported = leg.unsupported;
+    input.unsupported_reason = leg.reason;
     auto const eval = evaluateLeg(input);
     leg.state = eval.state;
     if (!eval.reason.empty())
@@ -54,6 +56,9 @@ void ChannelBook::reset(Config const& cfg)
                 view.rate_num = previous.rate_num;
                 view.rate_den = previous.rate_den;
                 view.interlaced = previous.interlaced;
+                view.interlace_mode = previous.interlace_mode;
+                view.field_preview = previous.field_preview;
+                view.unsupported_total = previous.unsupported_total;
                 view.audio_channels = previous.audio_channels;
                 view.peak_dbfs = previous.peak_dbfs;
                 view.rms_dbfs = previous.rms_dbfs;
@@ -129,6 +134,7 @@ void ChannelBook::setRoute(int channel, LegKind kind, bool enable, std::string d
         leg.domain_resolved = false;
         leg.flow_open = false;
         leg.grains_flowing = false;
+        leg.unsupported = false;
     }
     refresh(leg);
 }
@@ -145,8 +151,40 @@ void ChannelBook::setProbe(int channel, LegKind kind, bool domainResolved, bool 
     leg.domain_resolved = domainResolved;
     leg.flow_open = flowOpen;
     leg.grains_flowing = flowing;
+    leg.unsupported = false;
     leg.reason = reason;
     refresh(leg);
+}
+
+void ChannelBook::setUnsupported(int channel, LegKind kind, std::string const& reason, bool count)
+{
+    std::lock_guard const lock{mu_};
+    auto* view = find(channel);
+    if (view == nullptr)
+    {
+        return;
+    }
+    auto& leg = kind == LegKind::Video ? view->video : view->audio;
+    leg.domain_resolved = true;
+    leg.flow_open = true;
+    leg.grains_flowing = false;
+    leg.unsupported = true;
+    leg.reason = reason;
+    refresh(leg);
+    if (count)
+    {
+        ++view->unsupported_total[reason];
+    }
+}
+
+void ChannelBook::setScan(int channel, std::string const& interlaceMode, std::string const& fieldPreview)
+{
+    std::lock_guard const lock{mu_};
+    if (auto* view = find(channel))
+    {
+        view->interlace_mode = interlaceMode;
+        view->field_preview = fieldPreview;
+    }
 }
 
 void ChannelBook::setFormat(int channel, int width, int height, int rateNum, int rateDen, bool interlaced, std::string const& format, int audioChannels)

@@ -40,7 +40,8 @@ std::string LatencyHistogram::render(std::string const& name, std::string const&
 
 namespace
 {
-char const* kStates[] = {"not_routed", "waiting", "no_signal", "running"};
+char const* kStates[] = {"not_routed", "waiting", "no_signal", "running", "unsupported"};
+char const* kUnsupportedReasons[] = {"grain_too_small", "odd_interlaced_height", "no_raster", "format_mismatch"};
 char const* kPublishStates[] = {"connecting", "publishing", "error"};
 
 void gaugeState(std::ostringstream& out, int channel, char const* kind, RunState state)
@@ -68,6 +69,7 @@ std::string renderMetrics(Config const& cfg, std::vector<ChannelView> const& cha
     out << "mxl_webrtc_monitor_simd_level{level=\"" << simdName(previewSimd()) << "\"} 1\n";
     out << "# HELP mxl_webrtc_monitor_channel_state Current channel state.\n";
     out << "# TYPE mxl_webrtc_monitor_channel_state gauge\n";
+    out << "# HELP mxl_webrtc_monitor_grains_read_total MXL video grains read (an interlaced flow: fields, two per frame).\n";
     out << "# TYPE mxl_webrtc_monitor_grains_read_total counter\n";
     out << "# TYPE mxl_webrtc_monitor_grains_dropped_total counter\n";
     out << "# TYPE mxl_webrtc_monitor_resyncs_total counter\n";
@@ -77,6 +79,8 @@ std::string renderMetrics(Config const& cfg, std::vector<ChannelView> const& cha
     out << "# TYPE mxl_webrtc_monitor_encoder_fallbacks_total counter\n";
     out << "# TYPE mxl_webrtc_monitor_output_bitrate_bps gauge\n";
     out << "# TYPE mxl_webrtc_monitor_viewers gauge\n";
+    out << "# HELP mxl_webrtc_monitor_video_unsupported_total Times the video input's grains did not fit its flow definition.\n";
+    out << "# TYPE mxl_webrtc_monitor_video_unsupported_total counter\n";
     out << "# HELP mxl_webrtc_monitor_preview_mode Where the previews are published: own (built-in MediaMTX) or shared.\n";
     out << "# TYPE mxl_webrtc_monitor_preview_mode gauge\n";
     for (auto const* mode : {"own", "shared"})
@@ -111,6 +115,12 @@ std::string renderMetrics(Config const& cfg, std::vector<ChannelView> const& cha
         out << "mxl_webrtc_monitor_output_bitrate_bps{channel=\"" << n << "\"} " << channel.bitrate_bps << "\n";
         out << "mxl_webrtc_monitor_viewers{channel=\"" << n << "\",protocol=\"webrtc\"} " << channel.viewers_webrtc << "\n";
         out << "mxl_webrtc_monitor_viewers{channel=\"" << n << "\",protocol=\"hls\"} " << channel.viewers_hls << "\n";
+        for (auto const* reason : kUnsupportedReasons)
+        {
+            auto const found = channel.unsupported_total.find(reason);
+            out << "mxl_webrtc_monitor_video_unsupported_total{channel=\"" << n << "\",reason=\"" << reason << "\"} "
+                << (found != channel.unsupported_total.end() ? found->second : 0) << "\n";
+        }
         for (auto const* state : kPublishStates)
         {
             out << "mxl_webrtc_monitor_preview_publish_state{channel=\"" << n << "\",state=\"" << state << "\"} " << (channel.publish_state == state ? 1 : 0)

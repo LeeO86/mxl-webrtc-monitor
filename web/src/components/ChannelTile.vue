@@ -56,6 +56,7 @@ const source = computed(() => {
   const ch = c.value;
   if (ch.video.state === "not_routed") return "video not routed";
   if (ch.video.state === "waiting") return `waiting: ${reasonText(ch.video.reason) || "no flow yet"}`;
+  if (ch.video.state === "unsupported") return `unsupported: ${reasonText(ch.video.reason)}`;
   return [ch.source_label, ch.format].filter(Boolean).join(" · ") || "–";
 });
 const audioText = computed(() => {

@@ -89,9 +89,16 @@ export function download(name, text, type = "application/json") {
 }
 
 /** Channel leg states (§5.2) as words, and their pill colour. */
-export const STATE_TEXT = { running: "running", no_signal: "no signal", waiting: "waiting", not_routed: "not routed" };
-export const stateKind = (state) => ({ running: "ok", no_signal: "warn", waiting: "warn" })[state] || "neutral";
-const REASON_TEXT = { domain_not_found: "domain not found", flow_not_found: "flow not found" };
+export const STATE_TEXT = { running: "running", no_signal: "no signal", waiting: "waiting", not_routed: "not routed", unsupported: "unsupported" };
+export const stateKind = (state) => ({ running: "ok", no_signal: "warn", waiting: "warn", unsupported: "bad" })[state] || "neutral";
+const REASON_TEXT = {
+  domain_not_found: "domain not found",
+  flow_not_found: "flow not found",
+  grain_too_small: "grains smaller than the flow definition",
+  odd_interlaced_height: "interlaced with an odd height",
+  no_raster: "no picture size",
+  format_mismatch: "grains do not match the interlace mode",
+};
 export const reasonText = (reason) => REASON_TEXT[reason] || (reason || "").replaceAll("_", " ");
 
 /** RTSP publish state of a channel's preview, as a pill. */

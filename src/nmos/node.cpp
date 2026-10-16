@@ -193,6 +193,18 @@ void applyPlatformTags(nmos::resource& resource, Config const& cfg)
     }
 }
 
+// 1.4.1: the IS-04 receiver's subscription for a route restored from is05.json, as an IS-05 activation
+// of that route sets it (nmos-cpp's set_resource_subscription). 1.4.0 restored only the IS-05
+// resource, so after a restart IS-05 /active had master_enable true and the sender while the IS-04
+// subscription said active false and no sender.
+void applyPersistedSubscription(nmos::resource& receiver, LegRoute const& route)
+{
+    if (route.master_enable)
+    {
+        nmos::set_resource_subscription(receiver, true, us(route.sender_id), nmos::tai_now());
+    }
+}
+
 void applyPersistedRoute(web::json::value& connection, LegRoute const& route)
 {
     auto const domain = route.domain_id.empty() ? web::json::value::null() : web::json::value::string(us(route.domain_id));
@@ -391,6 +403,7 @@ void NmosNode::start()
                             auto caps = capsWith(std::move(sets), {});
                             caps[U("media_types")] = std::move(mediaTypes);
                             video.data[U("caps")] = std::move(caps);
+                            applyPersistedSubscription(video, impl_->book.route(i, LegKind::Video));
                             nmos::insert_resource(nodeModel.node_resources, std::move(video));
 
                             auto audio = nmos::make_receiver(us(audioId), us(impl_->ids.device), nmos::transports::mxl, {}, nmos::formats::audio,
@@ -410,6 +423,7 @@ void NmosNode::start()
                             web::json::push_back(audioTypes, web::json::value::string(nmos::media_types::audio_float32.name));
                             audioCaps[U("media_types")] = std::move(audioTypes);
                             audio.data[U("caps")] = std::move(audioCaps);
+                            applyPersistedSubscription(audio, impl_->book.route(i, LegKind::Audio));
                             nmos::insert_resource(nodeModel.node_resources, std::move(audio));
 
                             for (auto const& id : {videoId, audioId})

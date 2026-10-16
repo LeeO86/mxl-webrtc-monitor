@@ -155,7 +155,8 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
 - `master_enable: false` stops the channel's pipeline and shows the "not routed"
   state.
 - The active connection is stored in `STATE_DIR/is05.json` and restored on the
-  next start. A missing or corrupt file is ignored.
+  next start, with the IS-04 receiver `subscription` that its activation sets (1.4.1).
+  A missing or corrupt file is ignored.
 - The IS-04 receiver `subscription` (`sender_id`, `active`) is updated on every
   activation, so the fabrics agent and the crosspoint see it.
 - Video and audio receivers of a channel are independent: audio may come from a
@@ -192,11 +193,40 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
   much audio as the pushed video frames cover, read sample by sample after the last
   pushed sample; samples that are not there in time become silence.
 - If the reader falls behind beyond the ring (too late), it resynchronises to head
-  minus offset and counts a `resync` (metric).
+  minus offset and counts a `resync` (metric). A reader that stays too late (1.4.1;
+  e.g. `READ_OFFSET_GRAINS` beyond the flow's ring) retries once per grain and is
+  `no_signal` with a slate (one picture per frame period) after 500 ms without a good
+  grain; `resyncs_total` and `grains_dropped_total{reason="too_late"}` then rise about
+  once per grain.
+- Interlaced flows (1.4.1): MXL stores one field per grain (`frame_height / 2` lines,
+  at twice the definition's `grain_rate`). Grain 2k is the first field of frame k
+  (top for `interlaced_tff`, bottom for `interlaced_bff`). The reader reads frames
+  (both fields), `READ_OFFSET_GRAINS` counts frames, and one picture per frame goes
+  to the encoder at the frame rate. With the first-field preview (§5.3) only grain
+  2k must be there and valid; the woven preview needs both.
+- Every grain is checked against the flow definition before it is read. A grain
+  smaller than the definition's field or frame (`grain_too_small`), an interlaced
+  flow with an odd height (`odd_interlaced_height`) or no raster (`no_raster`) is
+  state `unsupported` with that reason: a slate, never a read past the grain. An
+  interlaced definition while MXL's own grain rate (`mxlFlowConfigInfo`) is not
+  twice its `grain_rate` (the grains are not fields) is `unsupported` with
+  `format_mismatch`. The
+  reader opens the flow again (200 ms) and resumes when the grains fit.
 - Format change of the source (new flow or changed `flow_def.json`): the channel
   rebuilds its pipeline. If the source mints a new flow id, the old id goes to
   `waiting`; following the new id is the controller's job (the crosspoint does
   this for MXL receivers).
+- A writer that restarts may delete its flow and make it again under the same id
+  (mxl-test-player keeps its flow ids), possibly with its domain directory. When a
+  flow's head has stopped, the reader asks MXL once per pass (video, at most every
+  80 ms for audio) whether the flow on disk is still the one it reads (a
+  non-blocking read past the head: `FLOW_INVALID` when it is gone or another one)
+  and then opens it again (1.4.1; log `flow_reopen`, at most one per frame). The
+  pipeline is kept when the format is the same. When the new flow is already there,
+  the channel runs again within a few frames. While the flow is gone the channel is
+  `waiting` (`flow_not_found`; 1.4.0 kept `no_signal` on the deleted flow) and
+  retries with the backoff (250 ms doubling to 5 s), so after a long gap it can take
+  up to about 5 s.
 - The reader runs on its own thread per flow; GStreamer pushes never block the
   reader thread for longer than one grain (bounded `appsrc` queue, leaky: drop
   oldest), so a slow encoder cannot stall MXL reading.
@@ -206,12 +236,13 @@ Repository layout mirrors the siblings (`.github/workflows`, `cmake`, `deploy`,
 - v210 → raw video via the pinned MXL/GStreamer conversion path (CPU unpack, or a
   GPU path if available and simple; record the choice).
 - Scaling to the channel's preview size (`MONITOR_PREVIEW_HEIGHT`, default 540,
-  aspect preserved); interlaced sources are deinterlaced (simple, e.g. bob or
-  yadif-equivalent available in GStreamer).
+  aspect preserved). Interlaced sources (1.4.1): a preview not taller than a field
+  is the frame's first field alone (no combing); a taller preview is the two fields
+  woven. The channel status says which (`field_preview`).
 - Optional frame-rate decimation (`MONITOR_MAX_FPS`, default 0 = source rate).
 - Overlay (burned in, configurable on/off): channel label, source label (IS-04
   label of the sender, looked up in the registry), format string (e.g. `1080p50`).
-- Slate when `waiting`, `no_signal` or `not routed`: static frame with the channel
+- Slate when `waiting`, `no_signal`, `unsupported` or `not routed`: static frame with the channel
   label and the state text, at the last known (or default 25p) rate, so the player
   never stalls.
 
@@ -342,6 +373,12 @@ setting `tally_text` in each channel of `/api/v1/channels` and the events; `PATC
 Additions for previews (1.3.0, §5.7): `preview` (`path`, `state`, `error`) in each channel of
 `/api/v1/channels` and the events; the playback URLs carry the path prefix.
 
+Additions for interlaced input (1.4.1, §5.2): the leg state `unsupported` (with the reason);
+`interlace_mode` (`progressive`, `interlaced_tff`, `interlaced_bff`; null before a flow was
+opened) and `field_preview` (`first_field` or `weave`; null for a progressive flow) in each
+channel of `/api/v1/channels` and the events. Like `format`, both keep the last flow's value
+after the channel is un-routed.
+
 ### 6.4 Ops endpoints
 
 `/livez`, `/readyz` (ready = MXL root mounted, NMOS registered or disabled,
@@ -424,7 +461,7 @@ that the environment owns. It returns 409 when `MONITOR_CONFIG_FILE` is unset.
 | `MONITOR_MAX_FPS` | 0 | 0 = source rate |
 | `MONITOR_VIDEO_BITRATE_KBPS` | 2000 | per channel |
 | `MONITOR_AUDIO_BITRATE_KBPS` | 128 | per channel |
-| `READ_OFFSET_GRAINS` | 2 | read behind head |
+| `READ_OFFSET_GRAINS` | 2 | read behind head (frames for an interlaced flow) |
 | `ENCODER` | `auto` | `auto`, `nvenc`, `x264` |
 | `MONITOR_PUBLIC_IP` | first non-loopback IPv4 | ICE host (`webrtcAdditionalHosts`) and the default for `NMOS_HOST_ADDRESS`. Must be an IP literal, not loopback and not `0.0.0.0` |
 | `NMOS_HOST_ADDRESS` | `MONITOR_PUBLIC_IP` | IP announced on the IS-04 href, API endpoints and IS-05 control hrefs |
@@ -490,11 +527,11 @@ is not part of v1.
 | --- | --- | --- |
 | `info` | gauge (1) | version, mxl_version, encoder_available |
 | `simd_level` | gauge (1) | level (`avx2` or `scalar`: the preview conversion's code) |
-| `channel_state` | gauge (1 for current state) | channel, kind (video/audio), state |
-| `grains_read_total` | counter | channel |
+| `channel_state` | gauge (1 for current state) | channel, kind (video/audio), state (not_routed, waiting, no_signal, running, unsupported) |
+| `grains_read_total` | counter | channel (grains: an interlaced flow's fields) |
 | `grains_dropped_total` | counter | channel, reason (queue_full, too_late) |
-| `resyncs_total` | counter | channel |
-| `read_lag_grains` | gauge | channel |
+| `resyncs_total` | counter | channel (about one per grain while a channel stays too late) |
+| `read_lag_grains` | gauge | channel (grains: an interlaced flow's fields) |
 | `encode_fps` | gauge | channel |
 | `encode_latency_seconds` | histogram | channel, encoder |
 | `encoder_fallbacks_total` | counter | channel |
@@ -503,6 +540,7 @@ is not part of v1.
 | `audio_peak_dbfs` | gauge | channel, input_channel (optional, off by default) |
 | `preview_mode` | gauge (1 for the mode) | mode (own/shared) |
 | `preview_publish_state` | gauge (1 for the current state) | channel, state (connecting/publishing/error) |
+| `video_unsupported_total` | counter | channel, reason (grain_too_small, odd_interlaced_height, no_raster, format_mismatch) |
 
 A Grafana dashboard `deploy/grafana/mxl-webrtc-monitor.json` shows states, lag,
 drops, encode fps and latency, bitrate and viewers. mediamtx's own metrics are
@@ -564,6 +602,11 @@ scraped separately.
   mediamtx and checks that segments are produced; then stops the writer and checks
   `no_signal`; then activates a non-existent flow and checks `waiting`, creates
   the flow later and checks `running` without further action.
+- Interlaced (1.4.1): unit tests for the grain layout, the size check, frames from
+  field pairs, the weave and the preview picture (tff and bff); an integration run
+  with tff and bff writers that decodes the preview (frame rate, first field, woven
+  field order) and a flow whose definition does not fit its grains (`unsupported`,
+  then running when the flow is re-created).
 - Hardware check (documented, not in CI): NVENC on A4000 and L4, 4 and 16 channels,
   browser playback via WebRTC from an operator desk, HLS fallback with UDP blocked.
 

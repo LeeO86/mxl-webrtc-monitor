@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(mxl-webrtc-monitor VERSION 1.4.0 LANGUAGES CXX)
+project(mxl-webrtc-monitor VERSION 1.4.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,6 +33,7 @@ add_library(mwm-core STATIC
     src/ops/api.cpp
     src/media/v210.cpp
     src/media/v210_avx2.cpp
+    src/media/interlace.cpp
     src/tally/tsl.cpp
 )
 target_include_directories(mwm-core PUBLIC src third_party)
@@ -54,6 +55,7 @@ if(MWM_BUILD_TESTS)
         tests/unit/test_v210.cpp
         tests/unit/test_tally.cpp
         tests/unit/test_preview.cpp
+        tests/unit/test_interlace.cpp
     )
     target_include_directories(unit-tests PRIVATE src third_party)
     target_link_libraries(unit-tests PRIVATE mwm-core)

@@ -95,3 +95,9 @@ jobs:
           export LD_LIBRARY_PATH=/opt/mxl/lib
           export MEDIAMTX_BIN=/tmp/mediamtx/mediamtx
           tests/integration/monitor.sh build/mxl-webrtc-monitor build/mxl-flow-writer
+
+      - name: Integration, interlaced inputs
+        run: |
+          export LD_LIBRARY_PATH=/opt/mxl/lib
+          export MEDIAMTX_BIN=/tmp/mediamtx/mediamtx
+          tests/integration/interlaced.sh build/mxl-webrtc-monitor build/mxl-flow-writer
