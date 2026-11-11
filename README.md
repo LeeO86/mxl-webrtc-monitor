@@ -2,6 +2,10 @@
 
 Watch and listen to MXL flows in a browser. Each monitor channel is a pair of NMOS BCP-007-03 MXL receivers (video and audio). A controller routes any sender to a channel with IS-05. The process reads the local MXL domain, encodes a low-bitrate preview, and publishes it to [MediaMTX](https://github.com/bluenviron/mediamtx): its own, built into the image, or a platform's shared one (see [Previews](#previews)). The built-in page shows every channel, with labels, state and audio meters; one channel can also be embedded in an operator screen (see [Widgets](#widgets)).
 
+Part of [mxl-stack](https://github.com/LeeO86/mxl-stack), a collection of open-source MXL media functions with Docker Compose and Kubernetes examples.
+
+![mxl-webrtc-monitor: four monitor channels in the browser](docs/images/web-ui.png)
+
 `mxl-fabrics-agent` sees the NMOS subscription and can replicate the flow onto this host. This process does not know about hosts or RDMA.
 
 ## Ports
@@ -144,7 +148,7 @@ Operator screens embed single components of the monitor. `GET /widgets` lists th
 
 `GET /widget/channel?ch=<n>[&labels=false][&meters=false][&theme=dark|light|transparent]` is one channel without the app around it: the WebRTC picture (HLS fallback, muted), the title with the label and the TSL lamps (`labels`), the tally border and text tally (the rules of the Multiview tile), and the audio meters (`meters`). It fills its frame; about 320×200 is the smallest useful size. `theme` forces dark or light colours, or dark colours on a transparent background; without it the widget follows the browser. The page uses this monitor's own API on the same origin (no CORS). An invalid parameter answers 400, another widget id 404.
 
-The `/widget` pages carry `Content-Security-Policy: frame-ancestors <WIDGET_FRAME_ANCESTORS>` (default `'self'`) and no `X-Frame-Options`, so only the listed origins may frame them, for example `WIDGET_FRAME_ANCESTORS="'self' https://designer.small.mxl.ipla.media.int"`. The rest of the app is unchanged. The widget posts `{type: "widget-ready"}` and `{type: "widget-size", w, h}` to the framing page.
+The `/widget` pages carry `Content-Security-Policy: frame-ancestors <WIDGET_FRAME_ANCESTORS>` (default `'self'`) and no `X-Frame-Options`, so only the listed origins may frame them, for example `WIDGET_FRAME_ANCESTORS="'self' https://designer.example.com"`. The rest of the app is unchanged. The widget posts `{type: "widget-ready"}` and `{type: "widget-size", w, h}` to the framing page.
 
 ## Tally (TSL)
 
@@ -182,8 +186,8 @@ WebRTC needs UDP from the browser to the ICE port. If UDP is blocked, the page f
 When the UI is opened through an HTTPS proxy, set the public bases of WHEP and HLS. The page uses those URLs as given. ICE of the built-in MediaMTX still uses `MONITOR_PUBLIC_IP` and does not go through the proxy.
 
 ```bash
-PREVIEW_WHEP_URL=https://mon1-whep.small.mxl.ipla.media.int
-PREVIEW_HLS_URL=https://mon1-hls.small.mxl.ipla.media.int
+PREVIEW_WHEP_URL=https://mon1-whep.example.com
+PREVIEW_HLS_URL=https://mon1-hls.example.com
 ```
 
 Leave both unset when opening the UI directly at `http://<node>:<WEB_PORT>`. The page then keeps `http://<MONITOR_PUBLIC_IP>:<port>/<prefix>/chN/...` and only replaces the hostname with the page's hostname.

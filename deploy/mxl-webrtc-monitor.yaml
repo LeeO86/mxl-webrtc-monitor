@@ -75,9 +75,9 @@ spec:
                   fieldPath: status.hostIP
             # Browser bases on the HTTPS ingress. ICE stays on MONITOR_PUBLIC_IP.
             # - name: PREVIEW_WHEP_URL
-            #   value: https://mon1-whep.small.mxl.ipla.media.int
+            #   value: https://mon1-whep.example.com
             # - name: PREVIEW_HLS_URL
-            #   value: https://mon1-hls.small.mxl.ipla.media.int
+            #   value: https://mon1-hls.example.com
             # Shared mode: publish to the platform's MediaMTX and start none here.
             # - name: PREVIEW_PUBLISH_URL
             #   value: rtsp://mxl-mediamtx.mxl-platform.svc:8554

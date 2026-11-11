@@ -248,8 +248,8 @@ TEST_CASE("the widget page may be framed by WIDGET_FRAME_ANCESTORS only")
     CHECK(f.get("/widget/channel", "ch=%34").status == 200);
     CHECK(f.get("/widget/other", "ch=1").status == 404);
 
-    Fixture designer({{"WIDGET_FRAME_ANCESTORS", "'self' https://designer.small.mxl.ipla.media.int"}});
-    CHECK(header(designer.get("/widget/channel", "ch=1"), "Content-Security-Policy") == "frame-ancestors 'self' https://designer.small.mxl.ipla.media.int");
+    Fixture designer({{"WIDGET_FRAME_ANCESTORS", "'self' https://designer.example.com"}});
+    CHECK(header(designer.get("/widget/channel", "ch=1"), "Content-Security-Policy") == "frame-ancestors 'self' https://designer.example.com");
     CHECK_THROWS_AS(mwm::parseConfig(base({{"WIDGET_FRAME_ANCESTORS", "'self'; script-src *"}})), mwm::ConfigError);
     CHECK_THROWS_AS(mwm::parseConfig(base({{"WIDGET_FRAME_ANCESTORS", "a\r\nX-Injected: 1"}})), mwm::ConfigError);
 }
