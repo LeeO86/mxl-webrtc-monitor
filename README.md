@@ -2,6 +2,8 @@
 
 Watch and listen to MXL flows in a browser. Each monitor channel is a pair of NMOS BCP-007-03 MXL receivers (video and audio). A controller routes any sender to a channel with IS-05. The process reads the local MXL domain, encodes a low-bitrate preview, and publishes it to [MediaMTX](https://github.com/bluenviron/mediamtx): its own, built into the image, or a platform's shared one (see [Previews](#previews)). The built-in page shows every channel, with labels, state and audio meters; one channel can also be embedded in an operator screen (see [Widgets](#widgets)).
 
+Part of [mxl-stack](https://github.com/LeeO86/mxl-stack), a collection of open-source MXL media functions with Docker Compose and Kubernetes examples.
+
 `mxl-fabrics-agent` sees the NMOS subscription and can replicate the flow onto this host. This process does not know about hosts or RDMA.
 
 ## Ports
