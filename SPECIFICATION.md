@@ -508,8 +508,8 @@ documents this.
 The UI, WHEP and HLS can each have their own hostname on a TLS proxy that
 only exposes port 443. Set `PREVIEW_WHEP_URL` and
 `PREVIEW_HLS_URL` to those absolute origins, for example
-`https://mon1-whep.small.mxl.ipla.media.int` and
-`https://mon1-hls.small.mxl.ipla.media.int`. The channel API then returns
+`https://mon1-whep.example.com` and
+`https://mon1-hls.example.com`. The channel API then returns
 `<base>/<prefix>/ch<n>/whep` and `<base>/<prefix>/ch<n>/index.m3u8` with `playback.public`
 true, and the page uses those URLs unchanged.
 
